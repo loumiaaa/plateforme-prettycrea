@@ -8,7 +8,8 @@ Web app installable sur iPad, iPhone et ordinateur, utilisable hors connexion, s
 - Les données sont **chiffrées sur l'appareil** (AES-GCM 256) avant d'être envoyées. Supabase ne stocke que des blocs illisibles : ni rendez-vous, ni montants, ni photos en clair.
 - Le **mot de passe ne quitte jamais l'appareil**. Le serveur reçoit seulement un secret de connexion qui en est dérivé, et la clé de chiffrement est dérivée séparément.
 - Seuls les comptes listés dans la table `prettycrea_membres` ont accès (sécurité au niveau des lignes, RLS).
-- Un mot de passe oublié **ne peut pas être récupéré** : c'est le prix du chiffrement. Pensez aux sauvegardes (Réglages › Sécurité).
+- **Mot de passe oublié** : à la création du compte, la plateforme affiche une **clé de secours** (32 caractères) à garder en lieu sûr. En cas d'oubli : écran de connexion › « Mot de passe oublié ? » › lien reçu par e-mail › clé de secours + nouveau mot de passe. Tout est retrouvé, et le nouveau mot de passe vaut sur tous les appareils. Une nouvelle clé peut être créée à tout moment dans Réglages › Sécurité.
+- Sans le mot de passe **ni** la clé de secours, personne ne peut rouvrir les données : c'est le prix du chiffrement.
 
 ## Mise en route
 
@@ -17,14 +18,14 @@ Web app installable sur iPad, iPhone et ordinateur, utilisable hors connexion, s
 Le script s'ajoute sans risque à un projet existant : tout est préfixé `prettycrea` et rien d'existant n'est modifié.
 
 1. Ouvrir le projet Supabase › **SQL Editor** › **New query**.
-2. Coller le contenu de [`supabase/schema.sql`](supabase/schema.sql) › **Run**.
+2. Coller le contenu de [`supabase/schema.sql`](supabase/schema.sql) › **Run**. Le script peut être relancé sans risque (par exemple après une mise à jour) : il ne recrée que ce qui manque.
 3. **Authentication › Sign In / Providers › Email** : vérifier que l'inscription par e-mail est autorisée (« Allow new users to sign up »). On pourra la refermer une fois le compte de Lucile créé.
-4. **Authentication › URL Configuration** : ajouter l'adresse de la plateforme (étape 3) dans **Redirect URLs**, pour que le lien de confirmation par e-mail ramène au bon endroit.
+4. **Authentication › URL Configuration** : ajouter l'adresse de la plateforme (étape 3) dans **Redirect URLs**, pour que les liens reçus par e-mail (confirmation du compte, mot de passe oublié) ramènent au bon endroit.
 5. **Project Settings › API** : copier l'**URL du projet** et la clé **anon public**.
 
 ### 2. Brancher la plateforme sur Supabase
 
-Dans [`src/config.js`](src/config.js), renseigner les deux valeurs copiées :
+C'est déjà fait pour le projet actuel. Pour changer de projet, renseigner les deux valeurs dans [`src/config.js`](src/config.js) :
 
 ```js
 window.PC_CONFIG = {
@@ -51,7 +52,8 @@ Tant que ces valeurs sont vides, la plateforme fonctionne en mode local (sans sy
    insert into public.prettycrea_membres (user_id)
    select id from auth.users where email = 'adresse-de-lucile@exemple.fr';
    ```
-4. Revenir sur la plateforme › **J'ai déjà un compte** › se connecter. C'est prêt.
+4. Revenir sur la plateforme › **J'ai déjà un compte** › se connecter.
+5. La **clé de secours** s'affiche : la noter ou la télécharger, la ranger ailleurs que sur l'appareil. C'est prêt.
 
 ### 5. Installer sur ses appareils
 

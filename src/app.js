@@ -601,7 +601,7 @@ const SUPABASE_JS = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/d
 const TABLE = 'prettycrea_coffres';
 const BUCKET = 'prettycrea-photos';
 const SYNC_ON = () => !!(window.PC_CONFIG && PC_CONFIG.supabaseUrl && PC_CONFIG.supabaseAnonKey);
-const SYNC = { on: false, uid: null, email: null, secret: null, cle: null, base: 0, rev: 0, synced: 0, busy: false, timer: null, status: 'idle' };
+const SYNC = { on: false, uid: null, email: null, secret: null, cle: null, secours: null, base: 0, rev: 0, synced: 0, busy: false, timer: null, status: 'idle' };
 let SB = null;
 
 function loadScript(src) {
@@ -672,7 +672,7 @@ function mergeStates(a, b) {
 /* ---------- Copie locale chiffrée ---------- */
 async function persistLocal() {
   const blob = await seal(APP.key, APP.salt, APP.iter, APP.state);
-  await kv.set('vault', { ...blob, v: 2, email: SYNC.email, uid: SYNC.uid, cle: SYNC.cle, base: SYNC.base, dirty: SYNC.rev !== SYNC.synced });
+  await kv.set('vault', { ...blob, v: 2, email: SYNC.email, uid: SYNC.uid, cle: SYNC.cle, secours: SYNC.secours, base: SYNC.base, dirty: SYNC.rev !== SYNC.synced });
 }
 function scheduleSync(delay = 1200) {
   if (!SYNC.on) return;
@@ -705,11 +705,12 @@ async function syncNow() {
     let merged = false;
     for (let attempt = 0; attempt < 4; attempt++) {
       const startRev = SYNC.rev;
-      const { data: row, error } = await sb.from(TABLE).select('version, iv, donnees, sel, iterations, cle').eq('user_id', SYNC.uid).maybeSingle();
+      const { data: row, error } = await sb.from(TABLE).select('version, iv, donnees, sel, iterations, cle, sel_secours, cle_secours').eq('user_id', SYNC.uid).maybeSingle();
       if (error) throw error;
       if (row) {
         // Mot de passe changé sur un autre appareil : la clé des données ne change pas, seule son enveloppe.
         if (row.sel !== b64(APP.salt) || row.cle !== SYNC.cle) { APP.salt = unb64(row.sel); APP.iter = row.iterations; SYNC.cle = row.cle; }
+        if (row.cle_secours) SYNC.secours = { sel_secours: row.sel_secours, cle_secours: row.cle_secours };
         if (row.version !== SYNC.base) {
           const remote = normalize(await unseal(APP.key, { iv: row.iv, data: row.donnees }));
           APP.state = normalize(mergeStates(APP.state, remote));
@@ -720,7 +721,7 @@ async function syncNow() {
       if (row && SYNC.rev === SYNC.synced) break;
       const blob = await seal(APP.key, APP.salt, APP.iter, APP.state);
       if (!row) {
-        const { error: e2 } = await sb.from(TABLE).insert({ user_id: SYNC.uid, sel: blob.salt, iterations: blob.iter, cle: SYNC.cle, iv: blob.iv, donnees: blob.data, version: 1 });
+        const { error: e2 } = await sb.from(TABLE).insert({ user_id: SYNC.uid, sel: blob.salt, iterations: blob.iter, cle: SYNC.cle, ...(SYNC.secours || {}), iv: blob.iv, donnees: blob.data, version: 1 });
         if (e2) { if (e2.code === '23505') continue; throw e2; }
         SYNC.base = 1;
       } else {
@@ -793,6 +794,7 @@ async function openRemote(sb, user, email, pw, secret) {
     APP.salt = unb64(row.sel); APP.iter = row.iterations;
     APP.state = normalize(await unseal(APP.key, { iv: row.iv, data: row.donnees }));
     SYNC.cle = row.cle; SYNC.base = row.version; SYNC.rev = SYNC.synced = 0;
+    SYNC.secours = row.cle_secours ? { sel_secours: row.sel_secours, cle_secours: row.cle_secours } : null;
   } else {
     APP.salt = crypto.getRandomValues(new Uint8Array(16));
     APP.iter = PBKDF2_ITER;
@@ -813,6 +815,15 @@ async function openRemote(sb, user, email, pw, secret) {
     SYNC.base = 0; SYNC.rev = 1; SYNC.synced = 0;
   }
   SYNC.email = normEmail(email); SYNC.uid = user.id; SYNC.secret = secret; SYNC.on = true;
+  if (!SYNC.secours) {
+    // Nouveau coffre (ou coffre sans clé de secours) : on en crée une et on la montre avant d'entrer.
+    const code = newRecoveryCode();
+    SYNC.secours = await recoveryWrap(APP.key, code);
+    if (row) await sb.from(TABLE).update(SYNC.secours).eq('user_id', user.id);
+    await persistLocal();
+    renderRecoveryKey(code, () => { enterApp('private'); syncNow(); });
+    return true;
+  }
   enterApp('private');
   await persistLocal();
   syncNow();
@@ -898,7 +909,7 @@ async function onUnlockSynced(e) {
     APP.key = await unwrapKey(cache.cle, kek);
     APP.salt = unb64(cache.salt); APP.iter = cache.iter || PBKDF2_ITER;
     APP.state = normalize(await unseal(APP.key, cache));
-    Object.assign(SYNC, { email: cache.email, uid: cache.uid, cle: cache.cle, base: cache.base || 0, rev: cache.dirty ? 1 : 0, synced: 0, secret: await authSecret(cache.email, pw) });
+    Object.assign(SYNC, { email: cache.email, uid: cache.uid, cle: cache.cle, secours: cache.secours || null, base: cache.base || 0, rev: cache.dirty ? 1 : 0, synced: 0, secret: await authSecret(cache.email, pw) });
     enterApp('private');
     connectSync();
   } catch {
@@ -936,7 +947,189 @@ async function forgetDevice() {
   try { const sb = await sbClient(); if (sb) await sb.auth.signOut(); } catch {}
   await kv.del('vault');
   await kv.del('photoQueue');
-  Object.assign(SYNC, { on: false, uid: null, email: null, secret: null, cle: null, base: 0, rev: 0, synced: 0 });
+  Object.assign(SYNC, { on: false, uid: null, email: null, secret: null, cle: null, secours: null, base: 0, rev: 0, synced: 0 });
+}
+
+/* ---------- Clé de secours : rouvrir le coffre après un mot de passe oublié ---------- */
+const B32 = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+function newRecoveryCode() {
+  const bytes = crypto.getRandomValues(new Uint8Array(20));
+  let bits = '', out = '';
+  bytes.forEach((b) => { bits += b.toString(2).padStart(8, '0'); });
+  for (let i = 0; i < bits.length; i += 5) out += B32[parseInt(bits.slice(i, i + 5), 2)];
+  return out.match(/.{4}/g).join('-');
+}
+const normCode = (c) => String(c || '').toUpperCase().replace(/O/g, '0').replace(/[IL]/g, '1').replace(/[^0-9A-Z]/g, '');
+async function recoveryWrap(dek, code) {
+  const sel = crypto.getRandomValues(new Uint8Array(16));
+  const kek = await deriveKey(normCode(code), sel, PBKDF2_ITER);
+  return { sel_secours: b64(sel), cle_secours: await wrapKey(dek, kek) };
+}
+async function recoveryUnwrap(row, code) {
+  const kek = await deriveKey(normCode(code), unb64(row.sel_secours), PBKDF2_ITER);
+  return unwrapKey(row.cle_secours, kek);
+}
+
+/* Écran qui présente la clé de secours (création du compte ou nouvelle clé). */
+function renderRecoveryKey(code, next) {
+  root().innerHTML = `
+  <main class="lock wrap" id="view">
+    <div class="lock-desk"><div class="letter-wrap"><article class="letter">
+      <header class="letter-head"><div class="letter-id">
+        <p class="letter-kicker">À garder précieusement</p>
+        <h1 class="h-title">Ta clé de secours</h1>
+        <p class="letter-tag">Elle remplace ton mot de passe si tu l'oublies</p>
+      </div></header>
+      <div class="compass-rule" aria-hidden="true"></div>
+      <section class="door">
+        <p>Si tu oublies ton mot de passe, cette clé est <strong>le seul moyen</strong> de retrouver tes données : personne d'autre (ni Lamia, ni le serveur) ne peut les ouvrir.</p>
+        <p class="recovery-code" id="rk-code" aria-label="Clé de secours">${esc(code)}</p>
+        <div class="btn-row">
+          <button class="btn" type="button" id="rk-copy">${icon('check')} Copier</button>
+          <button class="btn" type="button" id="rk-dl">${icon('download')} Télécharger</button>
+        </div>
+        <p class="small muted">Range-la ailleurs que sur cet appareil : imprimée chez toi, dans un gestionnaire de mots de passe ou dans les notes d'un autre appareil.</p>
+        <label class="check"><input type="checkbox" id="rk-ok"> J'ai noté ma clé de secours en lieu sûr</label>
+        <button class="btn primary" type="button" id="rk-next" disabled>${icon('door')} Continuer</button>
+      </section>
+    </article></div></div>
+  </main>`;
+  $('#rk-copy').onclick = async () => {
+    try { await navigator.clipboard.writeText(code); toast('Clé copiée'); }
+    catch { const r = document.createRange(); r.selectNodeContents($('#rk-code')); getSelection().removeAllRanges(); getSelection().addRange(r); }
+  };
+  $('#rk-dl').onclick = () => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([`PrettyCrea — clé de secours\nCompte : ${SYNC.email}\nCréée le : ${fmtLong(today())}\n\n${code}\n\nÀ utiliser via « Mot de passe oublié ? » sur l'écran de connexion.\n`], { type: 'text/plain' }));
+    a.download = 'prettycrea-cle-de-secours.txt';
+    document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  };
+  $('#rk-ok').onchange = (e) => { $('#rk-next').disabled = !e.target.checked; };
+  $('#rk-next').onclick = next;
+  $('#rk-copy').focus();
+}
+
+async function regenerateRecovery() {
+  const code = newRecoveryCode();
+  SYNC.secours = await recoveryWrap(APP.key, code);
+  const sb = await sbClient();
+  const { error } = await sb.from(TABLE).update(SYNC.secours).eq('user_id', SYNC.uid);
+  if (error) throw error;
+  await persistLocal();
+  renderRecoveryKey(code, () => { renderShell(); route(); toast('Nouvelle clé de secours enregistrée. L’ancienne ne fonctionne plus.'); });
+}
+
+async function onForgot(e) {
+  e.preventDefault();
+  const email = normEmail($('#acc-email').value);
+  const err = $('#unlock-error');
+  if (!/^\S+@\S+\.\S+$/.test(email)) { err.textContent = 'Indique l’adresse e-mail de ton compte.'; return; }
+  const btn = $('button[type="submit"]', e.target);
+  btn.disabled = true; err.textContent = 'Envoi…';
+  try {
+    const sb = await sbClient();
+    const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.href.split('#')[0] });
+    if (error) throw error;
+    err.textContent = `C'est envoyé. Ouvre le lien reçu à ${email} (pense aux indésirables), puis garde ta clé de secours à portée de main.`;
+  } catch (ex) {
+    console.error(ex);
+    btn.disabled = false;
+    err.textContent = /rate|seconds/i.test((ex && ex.message) || '') ? 'Trop de demandes rapprochées : réessaie dans quelques minutes.' : 'L’envoi a échoué. Vérifie ta connexion et réessaie.';
+  }
+}
+
+/* Arrivée depuis le lien de l'e-mail « mot de passe oublié ». */
+async function handleRecoveryLanding() {
+  const params = new URLSearchParams(location.hash.slice(1));
+  if (params.get('error_code') || params.get('error')) {
+    history.replaceState(null, '', location.pathname);
+    APP.lockTab = 'forgot';
+    return renderLock('Ce lien a expiré ou a déjà servi. Redemande un e-mail ci-dessous.');
+  }
+  try {
+    const sb = await sbClient();
+    const { data: { session } } = await sb.auth.getSession();
+    history.replaceState(null, '', location.pathname);
+    if (!session) { APP.lockTab = 'forgot'; return renderLock('Ce lien n’est plus valable. Redemande un e-mail ci-dessous.'); }
+    renderRecoveryForm(session.user);
+  } catch (ex) {
+    console.error(ex);
+    renderLock('Impossible de joindre le serveur. Vérifie ta connexion internet.');
+  }
+}
+function renderRecoveryForm(user) {
+  root().innerHTML = `
+  <main class="lock wrap" id="view">
+    <div class="lock-desk"><div class="letter-wrap"><article class="letter">
+      <header class="letter-head"><div class="letter-id">
+        <p class="letter-kicker">Mot de passe oublié</p>
+        <h1 class="h-title">Nouveau mot de passe</h1>
+        <p class="letter-tag">${esc(user.email)}</p>
+      </div></header>
+      <div class="compass-rule" aria-hidden="true"></div>
+      <section class="door">
+        <form id="recover-form" novalidate>
+          <div class="field">
+            <label for="rc-code">Clé de secours</label>
+            <input class="input recovery-input" id="rc-code" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX">
+          </div>
+          <div class="field">
+            <label for="rc-pw">Nouveau mot de passe <span class="hint">(10 caractères minimum)</span></label>
+            <input class="input" id="rc-pw" type="password" autocomplete="new-password">
+          </div>
+          <div class="field">
+            <label for="rc-pw2">Le même, une seconde fois</label>
+            <input class="input" id="rc-pw2" type="password" autocomplete="new-password">
+          </div>
+          <label class="check"><input type="checkbox" id="pw-show" data-show-pw> Afficher le mot de passe</label>
+          <p class="error" id="unlock-error" role="alert"></p>
+          <button class="btn primary" type="submit">${icon('lock')} Enregistrer et ouvrir mon espace</button>
+        </form>
+        <p class="small muted">Sans la clé de secours, les données chiffrées ne peuvent pas être rouvertes, même avec un nouveau mot de passe.</p>
+      </section>
+    </article></div></div>
+  </main>`;
+  $('#recover-form').addEventListener('submit', (e) => onRecover(e, user));
+  $('#rc-code').focus();
+}
+async function onRecover(e, user) {
+  e.preventDefault();
+  const err = $('#unlock-error');
+  const code = $('#rc-code').value, pw = $('#rc-pw').value, pw2 = $('#rc-pw2').value;
+  if (normCode(code).length !== 32) { err.textContent = 'La clé de secours compte 32 caractères (les tirets sont facultatifs).'; $('#rc-code').focus(); return; }
+  if (pw.length < 10) { err.textContent = 'Le mot de passe doit faire au moins 10 caractères.'; $('#rc-pw').focus(); return; }
+  if (pw !== pw2) { err.textContent = 'Les deux mots de passe ne sont pas identiques.'; $('#rc-pw2').focus(); return; }
+  const btn = $('button[type="submit"]', e.target);
+  btn.disabled = true; err.textContent = 'Vérification de la clé…';
+  try {
+    const sb = await sbClient();
+    const { data: row, error } = await sb.from(TABLE).select('*').eq('user_id', user.id).maybeSingle();
+    if (error) throw error;
+    if (!row || !row.cle_secours) { err.textContent = 'Aucun coffre avec clé de secours n’a été trouvé pour ce compte.'; btn.disabled = false; return; }
+    let dek;
+    try { dek = await recoveryUnwrap(row, code); }
+    catch { err.textContent = 'Cette clé de secours ne correspond pas. Vérifie chaque caractère.'; btn.disabled = false; return; }
+    err.textContent = 'Enregistrement du nouveau mot de passe…';
+    const email = normEmail(user.email);
+    const secret = await authSecret(email, pw);
+    const { error: e1 } = await sb.auth.updateUser({ password: secret });
+    if (e1) throw e1;
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const cle = await wrapKey(dek, await deriveKey(pw, salt, PBKDF2_ITER));
+    const { error: e2 } = await sb.from(TABLE).update({ sel: b64(salt), iterations: PBKDF2_ITER, cle }).eq('user_id', user.id);
+    if (e2) throw e2;
+    APP.key = dek; APP.salt = salt; APP.iter = PBKDF2_ITER;
+    APP.state = normalize(await unseal(dek, { iv: row.iv, data: row.donnees }));
+    Object.assign(SYNC, { email, uid: user.id, secret, cle, secours: { sel_secours: row.sel_secours, cle_secours: row.cle_secours }, base: row.version, rev: 0, synced: 0, on: true });
+    enterApp('private');
+    await persistLocal();
+    syncNow();
+    toast('Mot de passe changé. Il vaut maintenant sur tous tes appareils.');
+  } catch (ex) {
+    console.error(ex);
+    btn.disabled = false;
+    err.textContent = 'La modification a échoué. Vérifie ta connexion et réessaie.';
+  }
 }
 
 /* ---------- Photos chiffrées (stockage séparé, synchronisé) ---------- */
@@ -1016,6 +1209,7 @@ async function boot() {
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch {}
   let mode = null;
   try { mode = sessionStorage.getItem('prettycrea.mode'); } catch {}
+  if (SYNC_ON() && /type=recovery|error_code=|access_token=/.test(location.hash)) return handleRecoveryLanding();
   if (mode === 'demo') return enterDemo();
   renderLock();
 }
@@ -1049,6 +1243,17 @@ async function renderLock(message = '') {
             ? `<p class="muted">Réservé à Lucile. Tes données sont chiffrées sur l'appareil, puis synchronisées entre ton iPad, ton téléphone et ton ordinateur.</p>`
             : `<p class="muted">Réservé à Lucile. Les données sont chiffrées avec ton mot de passe et restent dans ce navigateur, sur cet appareil.</p>`}
           ${!cryptoOk ? `<div class="notice warn">${icon('alert')}<p>Ce navigateur ne permet pas le chiffrement. Ouvre la plateforme dans Chrome, Firefox, Safari ou Edge à jour.</p></div>`
+          : synced && tab === 'forgot' ? `
+          <form id="acc-forgot" novalidate>
+            <p>Indique l'adresse de ton compte : tu recevras un lien pour choisir un nouveau mot de passe. Il te faudra ta <strong>clé de secours</strong>.</p>
+            <div class="field">
+              <label for="acc-email">Adresse e-mail</label>
+              <input class="input" id="acc-email" type="email" autocomplete="email" inputmode="email" value="${esc((cache && cache.email) || '')}" required>
+            </div>
+            <p class="error" id="unlock-error" role="alert">${esc(message)}</p>
+            <button class="btn primary" type="submit">${icon('door')} Recevoir le lien</button>
+            <button class="linkish" type="button" data-action="lock-tab" data-view="login">Retour à la connexion</button>
+          </form>`
           : syncedCache ? `
           <form id="unlock-form" novalidate>
             <p class="small">Connectée : <strong>${esc(cache.email)}</strong></p>
@@ -1059,6 +1264,7 @@ async function renderLock(message = '') {
             <label class="check"><input type="checkbox" id="pw-show" data-show-pw> Afficher le mot de passe</label>
             <p class="error" id="unlock-error" role="alert">${esc(message)}</p>
             <button class="btn primary" type="submit">${icon('door')} Ouvrir mon espace</button>
+            <button class="linkish" type="button" data-action="lock-tab" data-view="forgot">Mot de passe oublié ?</button>
           </form>
           <details>
             <summary>Changer de compte ou d'appareil</summary>
@@ -1089,6 +1295,7 @@ async function renderLock(message = '') {
             ${tab === 'signup' ? `<p class="hint muted">Ce mot de passe chiffre tes données : il ne peut pas être récupéré. Note-le dans un endroit sûr.</p>` : ''}
             <p class="error" id="unlock-error" role="alert">${esc(message)}</p>
             <button class="btn primary" type="submit">${icon(tab === 'login' ? 'door' : 'lock')} ${tab === 'login' ? 'Me connecter' : 'Créer mon compte'}</button>
+            ${tab === 'login' ? `<button class="linkish" type="button" data-action="lock-tab" data-view="forgot">Mot de passe oublié ?</button>` : ''}
           </form>`
           : hasVault ? `
           <form id="unlock-form" novalidate>
@@ -1137,9 +1344,9 @@ async function renderLock(message = '') {
       <div class="lock-art lock-art-r">${ART.night}</div>
     </div>
   </main>`;
-  const f = $('#unlock-form') || $('#create-form') || $('#acc-login') || $('#acc-signup');
+  const f = $('#acc-forgot') || $('#unlock-form') || $('#create-form') || $('#acc-login') || $('#acc-signup');
   if (f) {
-    const handler = { 'unlock-form': syncedCache ? onUnlockSynced : onUnlock, 'create-form': onCreate, 'acc-login': onLogin, 'acc-signup': onSignup }[f.id];
+    const handler = { 'acc-forgot': onForgot, 'unlock-form': syncedCache ? onUnlockSynced : onUnlock, 'create-form': onCreate, 'acc-login': onLogin, 'acc-signup': onSignup }[f.id];
     f.addEventListener('submit', handler);
     $('input', f).focus();
   }
@@ -2154,6 +2361,10 @@ function viewReglages() {
       ${SYNC.email ? `
       <div class="restline"><span class="ic">${icon('check')}</span><span>Synchronisation active pour <strong>${esc(SYNC.email)}</strong>. Tes données sont chiffrées sur l'appareil avant d'être envoyées.</span></div>
       <p class="small muted">Pour ajouter un appareil : ouvre la plateforme dessus et connecte-toi avec la même adresse et le même mot de passe. Une sauvegarde de temps en temps reste une bonne idée.</p>
+      <details class="fold"><summary>Clé de secours</summary><div>
+        <p class="small">${SYNC.secours ? 'Ta clé de secours permet de choisir un nouveau mot de passe si tu oublies le tien. Si tu l’as perdue, crée-en une nouvelle : l’ancienne cessera de fonctionner.' : '<strong>Tu n’as pas encore de clé de secours.</strong> Crée-la maintenant : sans elle, un mot de passe oublié ferait perdre tes données.'}</p>
+        <div class="btn-row"><button type="button" class="btn sm" data-action="new-recovery">${icon('lock')} Créer une nouvelle clé de secours</button></div>
+      </div></details>
       <div class="btn-row"><button type="button" class="btn sm danger" data-action="forget-device">${icon('door')} Déconnecter cet appareil</button></div>`
       : `<p class="small muted">Tes données sont chiffrées et rangées uniquement dans ce navigateur. Fais une sauvegarde chaque début de mois : elle permet de tout retrouver ou de passer sur un autre appareil.</p>`}
       <div class="btn-row"><button type="button" class="btn primary" data-action="export">${icon('download')} Télécharger une sauvegarde</button></div>
@@ -2300,6 +2511,11 @@ function toast(message, undo) {
 const ACTIONS = {
   'enter-demo': () => enterDemo(),
   'lock-tab': (el) => { APP.lockTab = el.dataset.view; renderLock(); },
+  'new-recovery': async (el) => {
+    if (!navigator.onLine) { toast('Il faut être connectée à internet pour créer une clé de secours.'); return; }
+    el.disabled = true;
+    try { await regenerateRecovery(); } catch (e) { console.error(e); el.disabled = false; toast('La création a échoué. Réessaie dans un instant.'); }
+  },
   'forget-device': async (el) => {
     if (el.dataset.confirm !== '1') { el.dataset.confirm = '1'; el.innerHTML = `${icon('alert')} Confirmer la déconnexion`; return; }
     clearTimeout(APP.lockTimer);
