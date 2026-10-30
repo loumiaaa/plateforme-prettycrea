@@ -144,4 +144,5 @@ create policy "prettycrea_photos_suppression"
 --     uniquement ces deux lignes (sélectionne-les › Run).
 -- =====================================================================
 -- insert into public.prettycrea_membres (user_id)
--- select id from auth.users where email = 'adresse-de-lucile@exemple.fr';
+-- select id from auth.users where email = 'adresse-de-lucile@exemple.fr'
+-- on conflict (user_id) do nothing;

@@ -50,8 +50,10 @@ Tant que ces valeurs sont vides, la plateforme fonctionne en mode local (sans sy
 3. Dans Supabase › **SQL Editor**, exécuter la dernière ligne du script avec son adresse :
    ```sql
    insert into public.prettycrea_membres (user_id)
-   select id from auth.users where email = 'adresse-de-lucile@exemple.fr';
+   select id from auth.users where email = 'adresse-de-lucile@exemple.fr'
+   on conflict (user_id) do nothing;
    ```
+   Le résultat doit indiquer « 1 row » (ou « 0 rows » si elle était déjà autorisée).
 4. Revenir sur la plateforme › **J'ai déjà un compte** › se connecter.
 5. La **clé de secours** s'affiche : la noter ou la télécharger, la ranger ailleurs que sur l'appareil. C'est prêt.
 
