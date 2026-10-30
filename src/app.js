@@ -179,18 +179,18 @@ const ART = (() => {
   for (let i = 0; i <= 10; i++) { const x = 4 + i * 9.2; bites += `<circle cx="${f1(x)}" cy="4" r="2.6"/><circle cx="${f1(x)}" cy="116" r="2.6"/>`; }
   for (let i = 0; i <= 12; i++) { const y = 4 + i * 9.333; bites += `<circle cx="4" cy="${f1(y)}" r="2.6"/><circle cx="96" cy="${f1(y)}" r="2.6"/>`; }
   const stamp = (date) => `<svg class="art stamp" viewBox="-30 0 130 128" aria-hidden="true" focusable="false">
-    <defs><mask id="pc-perf"><rect x="0" y="0" width="100" height="120" fill="#fff"/><g fill="#000">${bites}</g></mask></defs>
-    <rect x="0" y="0" width="100" height="120" fill="#efe3c6" mask="url(#pc-perf)"/>
-    <rect x="10" y="10" width="80" height="100" fill="#5c1e2b"/>
-    <rect x="14" y="14" width="72" height="92" fill="none" stroke="#e7cf9c" stroke-opacity=".7" stroke-width=".8"/>
-    <g fill="none" stroke="#f1dfb8" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round">${moth(50, 60, .95)}</g>
-    <text x="50" y="27" text-anchor="middle" font-family="Cinzel, serif" font-weight="700" font-size="8.5" letter-spacing="1" fill="#f1dfb8">PRETTYCREA</text>
-    <text x="50" y="100" text-anchor="middle" font-family="'Special Elite', monospace" font-size="8" fill="#f1dfb8">poste privée</text>
-    <g fill="none" stroke="#2a1d14" stroke-opacity=".62" stroke-width="1.3">
+    <defs><mask id="pc-perf"><rect x="0" y="0" width="100" height="120" fill="#ffffff"/><g fill="#000000">${bites}</g></mask></defs>
+    <rect x="0" y="0" width="100" height="120" fill="#f6f0ff" mask="url(#pc-perf)"/>
+    <rect x="10" y="10" width="80" height="100" fill="#5c24be"/>
+    <rect x="14" y="14" width="72" height="92" fill="none" stroke="#d2bbfb" stroke-opacity=".7" stroke-width=".8"/>
+    <g fill="none" stroke="#f0e7ff" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round">${moth(50, 60, .95)}</g>
+    <text x="50" y="27" text-anchor="middle" font-family="Cinzel, serif" font-weight="700" font-size="8.5" letter-spacing="1" fill="#f0e7ff">PRETTYCREA</text>
+    <text x="50" y="100" text-anchor="middle" font-family="'Special Elite', monospace" font-size="8" fill="#f0e7ff">poste privée</text>
+    <g fill="none" stroke="#261642" stroke-opacity=".62" stroke-width="1.3">
       <circle cx="14" cy="96" r="25"/><circle cx="14" cy="96" r="20" stroke-width=".7"/>
       <path d="M-28 70q8-5 16 0t16 0t16 0t16 0t16 0M-28 78q8-5 16 0t16 0t16 0t16 0t16 0M-28 86q8-5 16 0t16 0t16 0"/>
     </g>
-    <text x="14" y="99" text-anchor="middle" font-family="'Special Elite', monospace" font-size="8.5" fill="#2a1d14" fill-opacity=".72">${date}</text>
+    <text x="14" y="99" text-anchor="middle" font-family="'Special Elite', monospace" font-size="8.5" fill="#261642" fill-opacity=".72">${date}</text>
   </svg>`;
 
   return { bouquet, moons, quill, jar, compass, candle, night, moth: mothSmall, stamp };
@@ -593,7 +593,7 @@ function seedDemo() {
   mk(3, 2, '15:00', 3, 'Mila', 'mila.gothrose', 'Rose gothique, cuisse', 350, 100, 'paypal', { deposit: { enabled: true, amount: 100, due: d(2, 2), paidOn: '' } });
   mk(5, 4, '11:00', 2, 'Ophélie', 'ophelie.letters', 'Lettrage ancien, côtes', 260, 0, 'virement');
   s.rest = Object.fromEntries([d(0, 3), d(2, 2), d(2, 4)].map((x) => [x, { on: true, at: 0 }]));
-  s.inventory.items = [newItem({ qty: 9, alertAt: 10 })];
+  s.inventory.items = [newItem({ qty: 9, alertAt: 10, base: undefined })];
   s.inventory.log = [
     { id: uid(), itemId: s.inventory.items[0].id, date: addDays(t, -30), delta: 25, note: 'Livraison' },
     { id: uid(), itemId: s.inventory.items[0].id, date: addDays(t, -2), delta: -1, note: 'Projet de Sarah' },
@@ -1605,11 +1605,12 @@ function renderShell() {
     <div class="topbar-in wrap">
       <a class="brand" href="#bibliotheque"><span class="brand-mark" aria-hidden="true">PC</span><span class="brand-name">PrettyCrea</span></a>
       <nav class="tabs" aria-label="Espaces">
-        ${NAV.map((n) => `<a class="tab" href="#${n.id}" data-nav="${n.id}">${icon(n.icon)}<span>${n.label}</span></a>`).join('')}
+        <p class="nav-label" aria-hidden="true">Espaces</p>
+        ${NAV.map((n) => `${n.id === 'reglages' ? '<p class="nav-label nav-label-end" aria-hidden="true">Paramètres</p>' : ''}<a class="tab" href="#${n.id}" data-nav="${n.id}">${icon(n.icon)}<span>${n.label}</span></a>`).join('')}
       </nav>
       <div class="top-actions">
         <span id="save-status" class="save-status" aria-live="polite"></span>
-        <button class="round" type="button" data-action="lock" aria-label="${demo ? 'Quitter la démo' : 'Verrouiller'}" title="${demo ? 'Quitter la démo' : 'Verrouiller'}">${icon(demo ? 'door' : 'lock')}</button>
+        <button class="round" type="button" data-action="lock" aria-label="${demo ? 'Quitter la démo' : 'Verrouiller'}" title="${demo ? 'Quitter la démo' : 'Verrouiller'}">${icon(demo ? 'door' : 'lock')}<span class="lock-label">${demo ? 'Quitter la démo' : 'Verrouiller'}</span></button>
       </div>
     </div>
   </header>
@@ -1653,10 +1654,10 @@ const STAR = (() => {
   let d = '';
   for (let k = 0; k < 28; k++) { const a = (k / 28) * Math.PI * 2, r = k % 2 ? 46 : 49.5; d += `${k ? 'L' : 'M'}${(50 + Math.cos(a) * r).toFixed(1)} ${(50 + Math.sin(a) * r).toFixed(1)}`; }
   // V3 : sceau de cire sur deux rubans de velours
-  return `<svg class="accent-star seal" viewBox="0 0 100 138" aria-hidden="true"><defs><radialGradient id="wax" cx=".38" cy=".32" r=".75"><stop offset="0" stop-color="#b5485a"/><stop offset=".55" stop-color="#7a2233"/><stop offset="1" stop-color="#3f0f19"/></radialGradient></defs>
-    <path d="M34 70L22 134L33 124L42 136L50 74Z" fill="#2b0a12"/><path d="M66 70L78 134L67 124L58 136L50 74Z" fill="#3a0f19"/>
-    <path d="M36 76L27 124M64 76L73 124" stroke="#c9a560" stroke-opacity=".45" stroke-width="1" fill="none"/>
-    <path d="${d}Z" fill="url(#wax)"/><circle cx="50" cy="50" r="33" fill="none" stroke="#3f0f19" stroke-opacity=".55" stroke-width="2.5"/><circle cx="50" cy="50" r="33" fill="none" stroke="#e29aa6" stroke-opacity=".25" stroke-width="1" transform="translate(-.8 -.8)"/><text x="50" y="59" text-anchor="middle" font-family="Cinzel, serif" font-weight="700" font-size="26" fill="#2a0810" fill-opacity=".85">PC</text><text x="49.2" y="58.2" text-anchor="middle" font-family="Cinzel, serif" font-weight="700" font-size="26" fill="#f0b3bd" fill-opacity=".5">PC</text></svg>`;
+  return `<svg class="accent-star seal" viewBox="0 0 100 138" aria-hidden="true"><defs><radialGradient id="wax" cx=".38" cy=".32" r=".75"><stop offset="0" stop-color="#aa7df8"/><stop offset=".55" stop-color="#793be5"/><stop offset="1" stop-color="#361372"/></radialGradient></defs>
+    <path d="M34 70L22 134L33 124L42 136L50 74Z" fill="#290f55"/><path d="M66 70L78 134L67 124L58 136L50 74Z" fill="#361372"/>
+    <path d="M36 76L27 124M64 76L73 124" stroke="#b68ff9" stroke-opacity=".45" stroke-width="1" fill="none"/>
+    <path d="${d}Z" fill="url(#wax)"/><circle cx="50" cy="50" r="33" fill="none" stroke="#361372" stroke-opacity=".55" stroke-width="2.5"/><circle cx="50" cy="50" r="33" fill="none" stroke="#cfb3ff" stroke-opacity=".25" stroke-width="1" transform="translate(-.8 -.8)"/><text x="50" y="59" text-anchor="middle" font-family="Cinzel, serif" font-weight="700" font-size="26" fill="#290f55" fill-opacity=".85">PC</text><text x="49.2" y="58.2" text-anchor="middle" font-family="Cinzel, serif" font-weight="700" font-size="26" fill="#dfccff" fill-opacity=".5">PC</text></svg>`;
 })();
 ART.seal = STAR; // exposé pour la planche « Direction artistique » des maquettes
 function spread(id, left, right) {

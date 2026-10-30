@@ -33,7 +33,7 @@ html = f'''<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>PrettyCrea</title>
 <meta name="robots" content="noindex, nofollow">
-<meta name="theme-color" content="#0e0c0a">
+<meta name="theme-color" content="#120f1c">
 <meta name="color-scheme" content="dark light">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
