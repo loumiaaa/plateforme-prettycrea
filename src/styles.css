@@ -1045,3 +1045,124 @@ body { background-attachment: scroll; }
 .profile-pic img, .profile-pic .brand-mark { width: 88px; height: 88px; border-radius: 50%; object-fit: cover; display: grid; place-items: center; font-size: 1.6rem; box-shadow: 0 0 0 3px var(--line-strong); }
 .profile-fields { flex: 1 1 220px; display: grid; gap: 10px; min-width: 0; }
 @media (max-width: 480px) { .brand-avatar { width: 38px; height: 38px; } .brand-sub { display: none; } }
+
+/* =========================================================
+   UX — passe ergonomique
+   Ergonomie seulement : mêmes matières, mêmes polices, palette violette.
+   ========================================================= */
+
+/* 1. Focus clavier : anneau sombre sur le papier, clair sur l'ébène (contraste ≥ 3:1 partout) */
+:focus-visible { outline-color: #2a0b63; }
+.topbar :focus-visible, .demo-banner :focus-visible, .space-head :focus-visible, .sheet-head :focus-visible,
+.card-accent :focus-visible, .col > .page-head :focus-visible, .col > .restline .btn:focus-visible { outline-color: #d8c4fa; }
+.input:focus, .select:focus, .textarea:focus { outline-color: #2a0b63; }
+.sheet-body fieldset:focus { outline: 0; }
+
+/* 2. « Aujourd'hui » ne ressemble plus au focus : repère intérieur, l'anneau extérieur reste au clavier */
+.day-pill.is-today { outline: 0; box-shadow: inset 0 0 0 2px var(--card), inset 0 0 0 4.5px var(--accent); }
+.day-pill.is-today:focus-visible { outline: 3px solid #2a0b63; outline-offset: 2px; }
+
+/* 3. Bouton « Nouveau projet » toujours accessible */
+.quick-new { display: inline-flex; }
+.quick-new .ico { width: 1.15em; height: 1.15em; }
+@media (min-width: 901px) {
+  .quick-new { width: 100%; min-height: 48px; justify-content: flex-start; padding-inline: 0.95em; gap: 12px; background: var(--accent) !important; border-color: var(--brass-soft) !important; color: #e2d7f5 !important; }
+  .quick-new:hover { filter: brightness(1.18); }
+}
+@media (max-width: 900px) {
+  .quick-new { margin-left: auto; min-height: 44px; padding: 0.4em 0.85em; gap: 0.35em; background: var(--accent) !important; border-color: var(--brass-soft) !important; color: #e2d7f5 !important; font-size: 0.92rem; }
+  .quick-new + .tabs + .top-actions { margin-left: 0; }
+  .quick-new-label { font-size: 0; }
+  .quick-new-label::before { content: "Nouveau"; font-size: 0.92rem; }
+}
+@media (max-width: 360px) { .quick-new-label { display: none; } .quick-new { padding-inline: 0.7em; } }
+
+/* 4. Bandeau démo : une seule ligne sur téléphone */
+@media (max-width: 640px) {
+  .demo-more { display: none; }
+  .demo-banner .wrap { padding-block: 12px 8px !important; gap: 4px 12px; font-size: 0.86rem; }
+  .demo-banner .ico { display: none; }
+}
+
+/* 5. Bandeaux éditoriaux plus bas : le contenu utile remonte (rien n'est retiré) */
+.space-head .masthead { padding: 22px 40px 20px; }
+.mh-text { gap: 4px; }
+.mh-art .art { max-height: 128px; }
+.space-head .masthead .lede { margin-top: 6px; }
+@media (max-width: 640px) {
+  .space-head .masthead { padding: 16px 16px 14px; }
+  .space-head .masthead .h-title { font-size: 1.6rem; margin-top: 2px; }
+  .mh-tag { font-size: 1rem; }
+  .space-head .masthead .lede { font-size: 1rem; margin-top: 4px; }
+  main#view { padding-top: 18px; gap: 18px; }
+  .space, .space-head, .col { gap: 16px; }
+}
+
+/* 6. Cibles tactiles ≥ 44 px (téléphone, iPad, écrans tactiles) */
+@media (max-width: 1180px), (pointer: coarse) {
+  .round.sm { width: 44px; height: 44px; }
+  .btn.sm { min-height: 44px; }
+  .seg button, .seg label { min-height: 44px; }
+  .pill-link { min-height: 44px; }
+  details.fold > summary { padding-block: 10px; }
+  .quote-actions .linkish { padding-block: 10px; }
+  .door .linkish, .letter .linkish { padding-block: 8px; }
+}
+
+/* 7. Messages (toasts) : boutons lisibles, texte en police lisible */
+.toast { font-family: var(--f-legible); font-weight: 600; gap: 8px; padding: 6px 6px 6px 18px; box-shadow: 0 0 0 1px rgba(20, 13, 31, 0.35), 0 14px 32px rgba(0, 0, 0, 0.55); }
+.toast .btn { color: #140d1f; background: transparent; border-color: rgba(20, 13, 31, 0.45); min-height: 44px; }
+.toast .btn[data-toast-undo] { background: #1b1426; border-color: #1b1426; color: #e2d7f5; font-family: var(--f-type); font-weight: 400; letter-spacing: 0.04em; }
+.toast .btn.close { min-width: 44px; padding: 0; }
+.toast .btn:focus-visible { outline-color: #2a0b63; }
+
+/* 8. Fiche projet : formulaire aligné, en-tête compact, sommaire des sections */
+.field { align-content: start; }
+.sheet-steps {
+  position: relative; z-index: 1; display: flex; gap: 6px; flex-wrap: wrap; padding: 16px 24px 10px;
+  background: var(--card); border-bottom: 1px solid var(--line);
+}
+.sheet-steps .step {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0.3em 0.8em;
+  border: 1px solid var(--line-strong); border-radius: 4px; background: rgba(244, 238, 255, 0.45);
+  color: var(--ink); font-weight: 700; font-size: 0.88rem; cursor: pointer;
+}
+.sheet-steps .step:hover { border-color: var(--ink-soft); }
+.step-n { font-family: var(--f-display); font-weight: 700; color: var(--accent); font-size: 0.8rem; }
+.sheet-body { scroll-padding-top: 12px; }
+.sheet-body fieldset, .sheet-body .sheet-fold { scroll-margin-top: 12px; }
+@media (max-width: 640px) {
+  .sheet-kicker { display: none; }
+  .sheet-head { padding-top: 22px; padding-bottom: 14px; gap: 12px; }
+  .sheet-head h2 { font-size: 1.25rem; line-height: 1.2; }
+  .sheet-medal { width: 42px; height: 42px; }
+  .sheet-head .form-summary { font-size: 0.88rem; }
+  .sheet-steps { flex-wrap: nowrap; overflow-x: auto; gap: 6px; padding: 14px 16px 8px; scrollbar-width: none; }
+  .sheet-steps::-webkit-scrollbar { display: none; }
+  .sheet-steps .step { flex: none; min-height: 44px; }
+  .sheet-foot { gap: 8px; }
+  .sheet-foot .btn { min-height: 48px; }
+  .sheet-foot > .btn.primary { flex: 1 1 auto; }
+}
+
+/* 9. Agenda */
+.week-grid .pd-d { white-space: nowrap; }
+.m-name b { font-weight: 700; }
+@media (min-width: 1181px) {
+  [data-space="agenda"] .cols:has(.month) { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+}
+.col > .legend { color: var(--head-ink); font-size: 0.88rem; }
+.col > .legend .l-busy { background: #d1bff0; }
+.col > .legend .l-sketch { border-color: #b896ef; }
+.col > .legend .l-rest { background: rgba(209, 191, 240, 0.25); border-color: #b896ef; }
+
+/* 10. Étiquettes en machine à écrire : jamais trop petites */
+.pill { font-size: 0.84rem; }
+.row-sub { font-size: 0.9rem; }
+
+/* 11. Écran de connexion : choix « déjà un compte / première fois » sur une ligne */
+.door .seg { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+.door .seg button { padding-inline: 0.5em; white-space: normal; text-align: center; line-height: 1.2; }
+
+/* 12. Accueil : état vide avec action */
+.card .empty-box { background: transparent; box-shadow: none; }

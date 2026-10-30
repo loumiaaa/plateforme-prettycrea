@@ -1606,6 +1606,7 @@ function renderShell() {
   <header class="topbar">
     <div class="topbar-in wrap">
       <a class="brand" href="#bibliotheque">${S().profilePhoto ? photoImg(S().profilePhoto, 'brand-avatar', '') : '<span class="brand-mark" aria-hidden="true">PC</span>'}<span class="brand-text"><span class="brand-name">${esc(S().profileName || 'PrettyCrea')}</span>${S().profileName ? '<span class="brand-sub">PrettyCrea</span>' : ''}</span></a>
+      <button class="btn primary quick-new" type="button" data-action="new-project" aria-label="Nouveau projet" title="Nouveau projet">${icon('plus')}<span class="quick-new-label">Nouveau projet</span></button>
       <nav class="tabs" aria-label="Espaces">
         <p class="nav-label" aria-hidden="true">Espaces</p>
         ${NAV.map((n) => `${n.id === 'reglages' ? '<p class="nav-label nav-label-end" aria-hidden="true">Paramètres</p>' : ''}<a class="tab" href="#${n.id}" data-nav="${n.id}">${icon(n.icon)}<span>${n.label}</span></a>`).join('')}
@@ -1616,7 +1617,7 @@ function renderShell() {
       </div>
     </div>
   </header>
-  ${demo ? `<div class="demo-banner"><div class="wrap">${icon('eye')}<span><strong>Mode démo.</strong> Données fictives, sans lien avec l'espace privé de Lucile.</span><button class="linkish" type="button" data-action="reset-demo">Remettre la démo à zéro</button></div></div>` : ''}
+  ${demo ? `<div class="demo-banner"><div class="wrap">${icon('eye')}<span><strong>Mode démo.</strong><span class="demo-more"> Données fictives, sans lien avec l'espace privé de Lucile.</span></span><button class="linkish" type="button" data-action="reset-demo">Remettre la démo à zéro</button></div></div>` : ''}
   <main id="view" class="wrap" tabindex="-1"></main>`;
   setSaveStatus('saved');
 }
@@ -1698,7 +1699,7 @@ const row = ({ ic, title, sub = '', id, amt = '', amtCls = '', check = '', level
   <button class="row-main" type="button" data-action="open-project" data-id="${id}"><span class="row-title">${esc(title)}</span>${sub ? `<span class="row-sub">${esc(sub)}</span>` : ''}</button>
   ${amt ? `<span class="row-amt ${amtCls}">${amt}</span>` : '<span></span>'}
   ${check ? `<button class="round sm ok" type="button" data-action="mark-paid" data-id="${id}" data-kind="${check}" aria-label="Noter comme reçu : ${esc(title)}" title="Noter comme reçu">${icon('check')}</button>` : '<span></span>'}</li>`;
-const statusPill = (f) => f.status === 'now' ? `<span class="pill bad">${icon('alert')} À commander</span>` : f.status === 'soon' ? `<span class="pill warn">${icon('clock')} Bientôt</span>` : `<span class="pill ok">${icon('check')} Suffisant</span>`;
+const statusPill = (f) => f.status === 'now' ? `<span class="pill bad">${icon('alert')} À commander</span>` : f.status === 'soon' ? `<span class="pill warn">${icon('clock')} À commander bientôt</span>` : `<span class="pill ok">${icon('check')} Suffisant</span>`;
 
 /* =========================================================
    Accueil
@@ -1740,7 +1741,7 @@ function viewLibrary() {
     : isRestMarked(t) || weekday(t) === 6 ? "Aujourd'hui est un jour de repos. Prends soin de toi." : "Aucun rendez-vous aujourd'hui.";
 
   const left = `
-    ${pageHead(cap(fmtDay(t)), 'Hello, PrettyCrea', '', 'h1', `<p class="lede">${esc(lede)}</p>`)}<!--/head-->
+    ${pageHead(cap(fmtDay(t)), `Hello, ${esc(S().profileName || 'PrettyCrea')}`, '', 'h1', `<p class="lede">${esc(lede)}</p>`)}<!--/head-->
 
     <section class="card" aria-labelledby="c-next">
       ${cardHead('clock', 'Prochain rendez-vous', `<a class="pill-link" href="#agenda">Agenda ${icon('right')}</a>`, 'c-next')}
@@ -1753,24 +1754,20 @@ function viewLibrary() {
           <button class="btn primary" type="button" data-action="open-project" data-id="${next.id}">Ouvrir la fiche</button>
           ${next.deposit.enabled && next.deposit.amount > 0 ? `<span class="pill ${next.deposit.paidOn ? 'ok' : 'warn'}">Acompte ${next.deposit.paidOn ? 'reçu' : 'attendu'}</span>` : ''}
           <span class="pill">${money(next.price)}</span>
-        </div>` : `<p class="empty">Aucun rendez-vous prévu. Ajoute-en un depuis l'agenda.</p>`}
+        </div>` : `<div class="empty-box"><p>Aucun rendez-vous prévu pour l'instant.</p><button class="btn sm" type="button" data-action="new-project">${icon('plus')} Ajouter un projet</button></div>`}
+    </section>
+
+    <section class="card" aria-labelledby="c-todo">
+      ${cardHead('feather', 'À ne pas oublier', rems.length ? `<span class="count">${rems.length}</span>` : '', 'c-todo')}
+      ${rems.length ? `<ul class="rows">${rems.map((r) => row({ ic: r.icon, title: r.title, sub: r.sub, id: r.id, check: r.kind || '', level: r.level, amt: r.amt || '' })).join('')}</ul>`
+        : `<p class="empty">Rien d'urgent. Tout est en ordre.</p>`}
     </section>
 
     <section class="card" aria-labelledby="c-week">
       ${cardHead('moon', 'Ta semaine', `<span class="pill ${info.ok ? 'ok' : 'rest'}">${info.ok ? 'Repos respecté' : 'Repos à prévoir'}</span>`, 'c-week')}
       ${weekStrip(ws)}
       <p class="small ${info.ok ? 'muted' : ''}">${info.ok ? `${cap(plural(info.free.length, 'jour libre', 'jours libres'))} en plus du dimanche. Touche un jour pour l'ouvrir.` : esc(restMessage(info))}</p>
-    </section>
-
-    ${q ? `<figure class="card quote" aria-label="Citation du jour">
-      <blockquote lang="en"><p>« ${esc(q.text)} »</p></blockquote>
-      ${APP.showFr && q.fr ? `<p class="quote-fr">${esc(q.fr)} <span class="faint">(traduction libre)</span></p>` : ''}
-      <figcaption><cite>${esc(q.book)}</cite>${q.series && q.series !== q.book ? `, ${esc(q.series)}` : ''} · ${esc(q.author)}</figcaption>
-      <div class="quote-actions">
-        <button class="linkish" type="button" data-action="quote-next">Une autre citation</button>
-        ${q.fr ? `<button class="linkish" type="button" data-action="quote-fr" aria-pressed="${APP.showFr}">${APP.showFr ? 'Masquer la traduction' : 'Lire en français'}</button>` : ''}
-      </div>
-    </figure>` : ''}`;
+    </section>`;
 
   const right = `
     <section class="card card-accent" aria-labelledby="c-month">
@@ -1793,11 +1790,15 @@ function viewLibrary() {
       <div><a class="pill-link" href="#reserves">Réserves ${icon('right')}</a></div>
     </section>` : ''}
 
-    <section class="card" aria-labelledby="c-todo">
-      ${cardHead('feather', 'À ne pas oublier', rems.length ? `<span class="count">${rems.length}</span>` : '', 'c-todo')}
-      ${rems.length ? `<ul class="rows">${rems.map((r) => row({ ic: r.icon, title: r.title, sub: r.sub, id: r.id, check: r.kind || '', level: r.level, amt: r.amt || '' })).join('')}</ul>`
-        : `<p class="empty">Rien d'urgent. Tout est en ordre.</p>`}
-    </section>`;
+    ${q ? `<figure class="card quote" aria-label="Citation du jour">
+      <blockquote lang="en"><p>« ${esc(q.text)} »</p></blockquote>
+      ${APP.showFr && q.fr ? `<p class="quote-fr">${esc(q.fr)} <span class="faint">(traduction libre)</span></p>` : ''}
+      <figcaption><cite>${esc(q.book)}</cite>${q.series && q.series !== q.book ? `, ${esc(q.series)}` : ''} · ${esc(q.author)}</figcaption>
+      <div class="quote-actions">
+        <button class="linkish" type="button" data-action="quote-next">Une autre citation</button>
+        ${q.fr ? `<button class="linkish" type="button" data-action="quote-fr" aria-pressed="${APP.showFr}">${APP.showFr ? 'Masquer la traduction' : 'Lire en français'}</button>` : ''}
+      </div>
+    </figure>` : ''}`;
   return spread('accueil', left, right);
 }
 
@@ -1814,7 +1815,7 @@ function viewAgenda() {
   const label = c.view === 'month' ? fmtMonth(monthKey(c.cursor))
     : c.view === 'week' ? `Semaine du ${fmtLong(ws)}`
     : cap(fmt(c.cursor, { weekday: 'long', day: 'numeric', month: 'long' }));
-  const head = pageHead('Rendez-vous & projets', 'Agenda', `<button class="btn primary" type="button" data-action="new-project">${icon('plus')} Nouveau projet</button>`);
+  const head = pageHead('Rendez-vous & projets', 'Agenda');
   const toolbar = `<div class="toolbar">
       <div class="seg" role="group" aria-label="Vue de l'agenda">
         ${[['month', 'Mois'], ['week', 'Semaine'], ['day', 'Jour']].map(([v, l]) => `<button type="button" data-action="cal-view" data-view="${v}" aria-pressed="${c.view === v}">${l}</button>`).join('')}
@@ -1830,7 +1831,7 @@ function viewAgenda() {
   if (c.view === 'month') {
     const weeks = [];
     for (let w = startOfWeek(monthKey(c.cursor) + '-01'); monthKey(w) <= monthKey(c.cursor); w = addDays(w, 7)) weeks.push(w);
-    left = `${head}${toolbar}<!--/head--><p class="hint">Touche un jour pour voir son détail sur la page de droite. Le bouton + ajoute directement un projet.</p>${monthGrid(weeks)}
+    left = `${head}${toolbar}<!--/head--><p class="hint">${isNarrow() ? 'Touche un jour pour voir son détail juste en dessous.' : 'Touche un jour pour voir son détail à droite. Le bouton + ajoute directement un projet.'}</p>${monthGrid(weeks)}
       <div class="legend" aria-hidden="true"><span><i class="l-busy"></i> Rendez-vous</span><span><i class="l-sketch"></i> Croquis à rendre</span><span><i class="l-rest"></i> Repos</span></div>`;
     right = dayDetails(c.cursor) + weekNotes(ws);
   } else if (c.view === 'week') {
@@ -1856,7 +1857,7 @@ function monthGrid(weeks) {
         const sk = sketchesOn(d);
         const rest = isRestMarked(d);
         const cls = [monthKey(d) !== monthKey(c) && 'out', d === t && 'today', i === 6 && 'sun', rest && 'rest', d === c && 'is-sel'].filter(Boolean).join(' ');
-        const items = [...list.map((p) => `<span class="m-name ${p.status}">${fmtTime(p.time)} ${esc(clientLabel(p))}</span>`), ...sk.map((p) => `<span class="m-name sketch">Croquis ${esc(clientLabel(p))}</span>`)];
+        const items = [...list.map((p) => `<span class="m-name ${p.status}"><b>${esc(clientLabel(p))}</b> ${fmtTime(p.time)}</span>`), ...sk.map((p) => `<span class="m-name sketch">Croquis ${esc(clientLabel(p))}</span>`)];
         const aria = cap(fmtDay(d)) + (rest || i === 6 ? ', repos' : '') + (list.length ? `, ${plural(list.length, 'rendez-vous', 'rendez-vous')}` : '');
         return `<div class="m-cell ${cls}" data-action="cell" data-date="${d}">
           <button type="button" class="m-num" data-action="cell" data-date="${d}" aria-label="${esc(aria)}" aria-pressed="${d === c}">${fromISO(d).getDate()}</button>
@@ -2011,10 +2012,13 @@ function openProject(id, preset) {
       </div>
       <button type="button" class="icon-btn" data-action="close-sheet" aria-label="Fermer">${icon('close')}</button>
     </header>
+    <nav class="sheet-steps" aria-label="Aller à une section de la fiche">
+      ${[['fs-client', 'Cliente'], ['fs-rdv', 'Rendez-vous'], ['fs-pay', 'Paiement'], ['fs-sketch', 'Croquis'], ['fs-notes', 'Notes']].map(([id, l], k) => `<button type="button" class="step" data-action="sheet-jump" data-target="${id}"><span class="step-n" aria-hidden="true">${['I', 'II', 'III', 'IV', 'V'][k]}</span>${l}</button>`).join('')}
+    </nav>
     <div class="sheet-body">
       <div id="pf-warn" class="notice-list" aria-live="polite"></div>
 
-      <fieldset>
+      <fieldset id="fs-client" tabindex="-1">
         <legend>Cliente & projet</legend>
         <div class="grid-3">
           <div class="field">
@@ -2037,7 +2041,7 @@ function openProject(id, preset) {
         </div>
       </fieldset>
 
-      <fieldset>
+      <fieldset id="fs-rdv" tabindex="-1">
         <legend>Rendez-vous</legend>
         <div class="grid-3">
           <div class="field">
@@ -2062,7 +2066,7 @@ function openProject(id, preset) {
         </div>`}
       </fieldset>
 
-      <fieldset>
+      <fieldset id="fs-pay" tabindex="-1">
         <legend>Paiement</legend>
         <div class="grid-2">
           <div class="field">
@@ -2111,7 +2115,7 @@ function openProject(id, preset) {
         </div>
       </fieldset>
 
-      <fieldset>
+      <fieldset id="fs-sketch" tabindex="-1">
         <legend>Croquis</legend>
         <div class="grid-3">
           <div class="field">
@@ -2135,7 +2139,7 @@ function openProject(id, preset) {
         <label class="check"><input type="checkbox" id="f-sk-sent" name="skSent" ${p.sketch.sent ? 'checked' : ''}> Croquis envoyé à la cliente</label>
       </fieldset>
 
-      <details class="fold sheet-fold" ${hasExtra ? 'open' : ''}>
+      <details class="fold sheet-fold" id="fs-notes" ${hasExtra ? 'open' : ''}>
         <summary>Notes & photo${hasExtra ? '' : ' <span class="faint">(facultatif)</span>'}</summary>
         <div>
           <div class="field">
@@ -2486,7 +2490,7 @@ function viewReserves() {
         <div class="stock-num"><span class="big xl" aria-live="polite">${it.qty}</span><span class="muted">${esc(it.unit || it.name.toLowerCase())} en stock</span></div>
         <button type="button" class="round lg" data-action="inv-step" data-id="${it.id}" data-kind="1" aria-label="Ajouter 1 (${esc(it.name)})">+</button>
       </div>
-      ${it.perProject > 0 && f.up ? `${bar(f.covers / f.up, f.status === 'ok' ? 'good' : f.status === 'now' ? 'bad' : 'gold')}<p class="small muted">Assez pour ${Math.min(f.covers, f.up)} des ${plural(f.up, 'projet prévu', 'projets prévus')}.</p>` : ''}
+      ${it.perProject > 0 && f.up ? bar(f.covers / f.up, f.status === 'ok' ? 'good' : f.status === 'now' ? 'bad' : 'gold') : ''}
       <p>${text}</p>
       ${order ? `<div class="order-box ${f.status}">${icon('clock')}<p>${order} Livraison en ${it.deliveryDays} jours environ, plus 2 jours de marge.</p></div>` : ''}
     </section>`;
@@ -2495,7 +2499,7 @@ function viewReserves() {
     <section class="card" aria-labelledby="c-move">
       ${cardHead('plus', 'Ajouter ou retirer', '', 'c-move')}
       <form class="inv-move" data-inv-form="${it.id}">
-        <div class="field"><label for="inv-n-${it.id}">Quantité</label><input class="input num" id="inv-n-${it.id}" name="n" inputmode="numeric" placeholder="10"></div>
+        <div class="field"><label for="inv-n-${it.id}">Quantité</label><input class="input num" id="inv-n-${it.id}" name="n" inputmode="numeric" autocomplete="off"></div>
         <div class="field note"><label for="inv-note-${it.id}">Note <span class="hint">(facultatif)</span></label><input class="input" id="inv-note-${it.id}" name="note" placeholder="Livraison, casse…"></div>
         <button type="submit" class="btn primary" name="dir" value="1">${icon('plus')} Ajouter</button>
         <button type="submit" class="btn" name="dir" value="-1">Retirer</button>
@@ -2816,8 +2820,10 @@ const ACTIONS = {
   },
   'new-project': () => {
     // Jour proposé : aujourd'hui, ou le premier jour ouvré de la période affichée si elle est à venir.
-    let d = APP.cal.cursor && APP.cal.cursor > today() ? APP.cal.cursor : today();
-    if (APP.cal.view === 'week' && APP.cal.cursor > today()) d = startOfWeek(APP.cal.cursor);
+    // Hors de l'agenda (bouton toujours visible du menu), on part d'aujourd'hui.
+    const inCal = APP.route === 'agenda';
+    let d = inCal && APP.cal.cursor && APP.cal.cursor > today() ? APP.cal.cursor : today();
+    if (inCal && APP.cal.view === 'week' && APP.cal.cursor > today()) d = startOfWeek(APP.cal.cursor);
     while (weekday(d) === 6 || isRestMarked(d)) d = addDays(d, 1);
     openProject(null, { date: d });
   },
@@ -2829,6 +2835,13 @@ const ACTIONS = {
   },
 
   'close-sheet': () => requestClose(),
+  'sheet-jump': (el) => {
+    const t = $('#' + el.dataset.target);
+    if (!t) return;
+    if (t.tagName === 'DETAILS') t.open = true;
+    t.scrollIntoView({ block: 'start' });
+    (t.tagName === 'DETAILS' ? $('summary', t) : t).focus({ preventScroll: true });
+  },
   'keep-editing': () => { $('#close-zone').hidden = true; $('#pf-title').focus(); },
   'force-close': () => $('#sheet').close(),
   'remove-photo': () => { draft.photo = ''; $('#photo-slot').innerHTML = photoSlot(''); $('#photo-remove').hidden = true; $('#f-photo').value = ''; },
