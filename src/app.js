@@ -288,6 +288,10 @@ const DEFAULT_SETTINGS = {
   autoLock: 15,
   autoNeedle: false,
   calView: '',
+  notifDaily: true,
+  notifHour: '08:30',
+  notifBefore: 0,
+  notifDetail: 'discret',
 };
 
 const APP = {
@@ -738,6 +742,7 @@ async function syncNow() {
     setSync(SYNC.rev === SYNC.synced ? 'ok' : 'pending');
     if (merged) softRender();
     flushPhotoQueue();
+    pushPlan().catch(() => {});
   } catch (e) {
     console.error(e);
     const auth = e && (e.status === 401 || /jwt|token/i.test(e.message || ''));
@@ -1132,6 +1137,123 @@ async function onRecover(e, user) {
   }
 }
 
+/* ---------- Notifications (Web Push) ----------
+   L'appareil prépare les rappels des 3 prochaines semaines et les dépose sur le serveur,
+   qui les envoie à l'heure prévue sur tous les appareils inscrits. Le serveur ne lit
+   jamais le coffre chiffré : il ne voit que le texte des rappels (discret par défaut). */
+const NOTIF_TABLE = 'prettycrea_notifications';
+const DEVICE_TABLE = 'prettycrea_appareils';
+const PUSH_OK = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && !!(window.PC_CONFIG && PC_CONFIG.vapidPublicKey);
+const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const deviceLabel = () => { const u = navigator.userAgent; return /iPad/.test(u) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ? 'iPad' : /iPhone/.test(u) ? 'iPhone' : /Android/.test(u) ? 'Téléphone Android' : /Mac/.test(u) ? 'Mac' : /Windows/.test(u) ? 'PC Windows' : 'Appareil'; };
+const b64uToBytes = (s) => { const b = atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)); return Uint8Array.from(b, (c) => c.charCodeAt(0)); };
+let lastPlanHash = '';
+
+async function pushSubscription() {
+  if (!PUSH_OK()) return null;
+  const reg = await navigator.serviceWorker.getRegistration();
+  return reg ? reg.pushManager.getSubscription() : null;
+}
+async function enableNotifications() {
+  if (!PUSH_OK()) throw new Error('unsupported');
+  if (isIOS() && !isStandalone()) throw new Error('ios-install');
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') throw new Error('denied');
+  const reg = await navigator.serviceWorker.ready;
+  const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(PC_CONFIG.vapidPublicKey) });
+  const j = sub.toJSON();
+  const sb = await sbClient();
+  const { error } = await sb.from(DEVICE_TABLE).upsert({ endpoint: j.endpoint, user_id: SYNC.uid, p256dh: j.keys.p256dh, auth: j.keys.auth, appareil: deviceLabel() }, { onConflict: 'endpoint' });
+  if (error) throw error;
+  lastPlanHash = '';
+  await pushPlan();
+}
+async function disableNotifications() {
+  const sub = await pushSubscription();
+  if (!sub) return;
+  try { const sb = await sbClient(); await sb.from(DEVICE_TABLE).delete().eq('endpoint', sub.endpoint); } catch {}
+  await sub.unsubscribe();
+}
+
+/* Construit les rappels à venir (heure locale de l'appareil). */
+function notifPlan() {
+  const s = S();
+  if (s.notifDaily === false && !Number(s.notifBefore)) return [];
+  const named = s.notifDetail === 'prenoms';
+  const t = today();
+  const out = [];
+  const [hh, mm] = String(s.notifHour || '08:30').split(':').map(Number);
+  const at = (iso, h, m) => { const d = fromISO(iso); d.setHours(h, m, 0, 0); return d; };
+  const plural2 = (n, one, many) => `${n} ${n > 1 ? many : one}`;
+  for (let i = 0; i < 21; i++) {
+    const d = addDays(t, i);
+    const when = at(d, hh, mm);
+    if (s.notifDaily !== false && when > new Date()) {
+      const parts = [];
+      const rdv = active().filter((p) => p.date === d && p.status === 'prevu').sort(byDateTime);
+      if (rdv.length) parts.push(named ? `Rendez-vous : ${rdv.map((p) => `${clientLabel(p)} ${fmtTime(p.time)}`).join(', ')}` : `${plural2(rdv.length, 'rendez-vous', 'rendez-vous')} (${rdv.map((p) => fmtTime(p.time)).join(', ')})`);
+      const sk = active().filter((p) => p.sketch.due && !p.sketch.sent && p.sketch.remindDays !== null && p.sketch.remindDays !== '' && d >= addDays(p.sketch.due, -Number(p.sketch.remindDays)) && d <= p.sketch.due);
+      if (sk.length) parts.push(named ? `Croquis à envoyer : ${sk.map(clientLabel).join(', ')}` : plural2(sk.length, 'croquis à envoyer', 'croquis à envoyer'));
+      const dep = allPayments().filter((x) => !x.paidOn && x.kind === 'deposit' && x.p.status !== 'annule' && x.due <= d && diffDays(x.due, d) <= 3);
+      if (dep.length) parts.push(named ? `Acompte attendu : ${dep.map((x) => `${clientLabel(x.p)} (${money(x.amount)})`).join(', ')}` : plural2(dep.length, 'acompte attendu', 'acomptes attendus'));
+      const fin = allPayments().filter((x) => !x.paidOn && x.kind === 'final' && x.p.status !== 'annule' && x.due === addDays(d, -1));
+      if (fin.length) parts.push(named ? `Paiement final à noter : ${fin.map((x) => clientLabel(x.p)).join(', ')}` : plural2(fin.length, 'paiement final à noter', 'paiements finaux à noter'));
+      const it = needles();
+      if (it) { const f = forecast(it); if (f.orderBy && (f.orderBy === d || (i === 0 && f.orderBy < d))) parts.push(`Commander des ${it.name.toLowerCase()}`); }
+      if (weekday(d) === 0 && !restInfo(d).ok) parts.push('Pas encore de 2e jour de repos cette semaine');
+      if (parts.length) out.push({ cle: 'jour:' + d, envoyer_le: when.toISOString(), titre: weekday(d) === weekday(t) && i === 0 ? 'Ta journée' : `Ta journée · ${fmt(d, { weekday: 'long', day: 'numeric' })}`, corps: parts.join(' · '), lien: './#bibliotheque' });
+    }
+    const before = Number(s.notifBefore) || 0;
+    if (before) {
+      for (const p of active().filter((x) => x.date === d && x.status === 'prevu')) {
+        const w = at(d, ...p.time.split(':').map(Number));
+        w.setMinutes(w.getMinutes() - before);
+        if (w > new Date()) out.push({ cle: `rdv:${p.id}:${p.date}T${p.time}`, envoyer_le: w.toISOString(), titre: `Rendez-vous à ${fmtTime(p.time)}`, corps: named ? `${clientLabel(p)} · ${projLabel(p)}` : `Dans ${before >= 60 ? before / 60 + ' h' : before + ' min'}`, lien: './#agenda' });
+      }
+    }
+  }
+  return out;
+}
+/* Remplace les rappels à venir sur le serveur (seulement si quelque chose a changé). */
+async function pushPlan() {
+  if (!SYNC.on || !navigator.onLine || !(await pushSubscription())) return;
+  const plan = notifPlan();
+  const hash = JSON.stringify(plan);
+  if (hash === lastPlanHash) return;
+  const sb = await sbClient();
+  const { error } = await sb.from(NOTIF_TABLE).delete().eq('user_id', SYNC.uid).is('envoye_le', null);
+  if (error) return;
+  if (plan.length) {
+    const { error: e2 } = await sb.from(NOTIF_TABLE).upsert(plan.map((n) => ({ ...n, user_id: SYNC.uid, envoye_le: null })), { onConflict: 'user_id,cle' });
+    if (e2) return;
+  }
+  lastPlanHash = hash;
+}
+async function sendTestNotification() {
+  const sb = await sbClient();
+  const cle = 'test:' + Date.now();
+  await sb.from(NOTIF_TABLE).insert({ user_id: SYNC.uid, cle, envoyer_le: new Date().toISOString(), titre: 'PrettyCrea', corps: 'Les notifications fonctionnent sur cet appareil.', lien: './#reglages' });
+  try { await sb.functions.invoke('prettycrea-notifier', { body: {} }); } catch {}
+}
+async function renderNotifStatus() {
+  const box = $('#notif-status');
+  if (!box) return;
+  let html;
+  if (!PUSH_OK()) html = `<p class="small">Ce navigateur ne gère pas les notifications. Sur ordinateur, utilise Chrome ou Edge ; sur iPhone et iPad, installe d'abord la plateforme.</p>`;
+  else if (isIOS() && !isStandalone()) html = `<p class="small"><strong>Sur iPhone et iPad, il faut d'abord installer la plateforme :</strong> bouton Partager › « Sur l'écran d'accueil ». Ouvre-la ensuite depuis son icône et reviens ici.</p>`;
+  else if (Notification.permission === 'denied') html = `<p class="small">Les notifications sont bloquées pour ce site. Autorise-les dans les réglages du navigateur (ou de l'appareil), puis reviens ici.</p>`;
+  else {
+    const sub = await pushSubscription();
+    html = sub
+      ? `<div class="restline"><span class="ic">${icon('check')}</span><span>Notifications activées sur cet appareil (${esc(deviceLabel())}).</span></div>
+         <div class="btn-row"><button type="button" class="btn sm" data-action="notif-test">Envoyer une notification de test</button><button type="button" class="btn sm ghost" data-action="notif-off">Désactiver sur cet appareil</button></div>`
+      : `<p class="small">Active les notifications sur chaque appareil où tu veux les recevoir (téléphone, iPad, ordinateur).</p>
+         <div class="btn-row"><button type="button" class="btn primary sm" data-action="notif-on">${icon('alert')} Activer sur cet appareil</button></div>`;
+  }
+  box.innerHTML = html;
+}
+
 /* ---------- Photos chiffrées (stockage séparé, synchronisé) ---------- */
 const PHOTO_URLS = {};
 const BLANK = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
@@ -1491,6 +1613,7 @@ function render(fresh = false) {
   const focusKey = !fresh && a && v.contains(a) ? (a.id ? '#' + CSS.escape(a.id) : a.dataset.action ? `[data-action="${a.dataset.action}"]${a.dataset.id ? `[data-id="${a.dataset.id}"]` : ''}${a.dataset.date ? `[data-date="${a.dataset.date}"]` : ''}${a.dataset.view ? `[data-view="${a.dataset.view}"]` : ''}${a.dataset.kind ? `[data-kind="${a.dataset.kind}"]` : ''}` : null) : null;
   v.innerHTML = VIEWS[APP.route]();
   hydratePhotos(v);
+  if (APP.route === 'reglages') renderNotifStatus();
   document.title = `${TITLES[APP.route]} · PrettyCrea`;
   if (focusKey) { const el = $(focusKey, v); if (el) el.focus({ preventScroll: true }); }
 }
@@ -2353,6 +2476,17 @@ function viewReglages() {
       ${cardHead('needle', 'Réserves', '', 's-inv')}
       <div class="set-row"><span class="label" id="lbl-autoNeedle">Retirer une aiguille quand un projet passe à « Réalisé »</span>${opt('autoNeedle', s.autoNeedle, [['false', 'Non'], ['true', 'Oui']])}</div>
     </section>
+    ${SYNC.email ? `<section class="card" aria-labelledby="s-notif">
+      ${cardHead('alert', 'Notifications', '', 's-notif')}
+      <div id="notif-status"><p class="small muted">Vérification…</p></div>
+      <div>
+        <div class="set-row"><span class="label" id="lbl-notifDaily">Résumé du jour<span class="hint">Une seule notification par jour, seulement s'il y a quelque chose.</span></span>${opt('notifDaily', s.notifDaily !== false, [['true', 'Oui'], ['false', 'Non']])}</div>
+        <div class="set-row"><label class="label" for="set-notifHour">Heure du résumé</label><input class="input" type="time" id="set-notifHour" data-setting="notifHour" value="${esc(s.notifHour || '08:30')}"></div>
+        <div class="set-row"><label class="label" for="set-notifBefore">Rappel avant un rendez-vous</label>
+          <select class="select" id="set-notifBefore" data-setting="notifBefore">${[[0, 'Pas de rappel'], [30, '30 minutes avant'], [60, '1 heure avant'], [120, '2 heures avant']].map(([v, l]) => `<option value="${v}" ${Number(s.notifBefore) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <div class="set-row"><span class="label" id="lbl-notifDetail">Contenu des notifications<span class="hint">« Discret » n'affiche aucun prénom : ni sur l'écran verrouillé, ni sur le serveur.</span></span>${opt('notifDetail', s.notifDetail || 'discret', [['discret', 'Discret'], ['prenoms', 'Avec les prénoms']])}</div>
+      </div>
+    </section>` : ''}
     <section class="card" aria-labelledby="s-sec">
       ${cardHead('lock', priv ? 'Sécurité & sauvegardes' : 'Démo', '', 's-sec')}
       ${priv ? `
@@ -2395,7 +2529,8 @@ function onSettingChange(el) {
   if (['urssafRate', 'shopRate', 'defaultDuration'].includes(key)) val = Math.max(0, num(val));
   if (['dayStart', 'dayEnd', 'autoLock'].includes(key)) val = Number(val);
   if (key === 'defaultRemind') val = val === '' ? null : Number(val);
-  if (key === 'autoNeedle') val = val === 'true';
+  if (key === 'autoNeedle' || key === 'notifDaily') val = val === 'true';
+  if (key === 'notifBefore') val = Number(val);
   S()[key] = val;
   APP.state.settingsAt = Date.now();
   if (key === 'dayStart' && S().dayEnd <= val) S().dayEnd = Math.min(24, val + 1);
@@ -2511,6 +2646,17 @@ function toast(message, undo) {
 const ACTIONS = {
   'enter-demo': () => enterDemo(),
   'lock-tab': (el) => { APP.lockTab = el.dataset.view; renderLock(); },
+  'notif-on': async (el) => {
+    el.disabled = true;
+    try { await enableNotifications(); toast('Notifications activées sur cet appareil.'); }
+    catch (e) {
+      console.error(e);
+      toast({ 'ios-install': "Installe d'abord la plateforme sur l'écran d'accueil, puis ouvre-la depuis son icône.", denied: 'Notifications refusées. Tu peux les autoriser dans les réglages de l’appareil.', unsupported: 'Ce navigateur ne gère pas les notifications.' }[e.message] || 'L’activation a échoué. Vérifie ta connexion et réessaie.');
+    }
+    renderNotifStatus();
+  },
+  'notif-off': async () => { await disableNotifications(); toast('Notifications désactivées sur cet appareil.'); renderNotifStatus(); },
+  'notif-test': async (el) => { el.disabled = true; await sendTestNotification(); toast('Notification de test envoyée : elle arrive dans quelques secondes (5 minutes au plus).'); setTimeout(() => { el.disabled = false; }, 4000); },
   'new-recovery': async (el) => {
     if (!navigator.onLine) { toast('Il faut être connectée à internet pour créer une clé de secours.'); return; }
     el.disabled = true;

@@ -61,6 +61,19 @@ Tant que ces valeurs sont vides, la plateforme fonctionne en mode local (sans sy
 - **Ordinateur** : ouvrir l'adresse dans **Chrome** ou **Edge** › icône **Installer** dans la barre d'adresse.
 - Sur chaque appareil, se connecter une fois avec la même adresse et le même mot de passe : tout se synchronise.
 
+## Notifications (téléphone, iPad, ordinateur)
+
+Un **résumé par jour** à l'heure choisie (rendez-vous, croquis à envoyer, acomptes attendus, aiguilles à commander, repos), et en option un **rappel avant chaque rendez-vous**. Par défaut, le texte est **discret** (aucun prénom) : le serveur ne lit jamais le coffre chiffré, c'est l'appareil de Lucile qui prépare ses rappels.
+
+Mise en place, une seule fois :
+
+1. **Déployer la fonction d'envoi** : Supabase › **Edge Functions** › **Deploy a new function** › **Via Editor** › nom `prettycrea-notifier` › coller le contenu de [`supabase/functions/prettycrea-notifier/index.ts`](supabase/functions/prettycrea-notifier/index.ts) › **Deploy**.
+2. **Secrets de la fonction** : Edge Functions › **Secrets** › ajouter `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` et `VAPID_SUBJECT` (valeurs transmises séparément : la clé privée ne doit jamais aller dans ce dépôt public).
+3. **SQL** : exécuter [`supabase/notifications.sql`](supabase/notifications.sql) (tables des rappels + envoi automatique toutes les 5 minutes avec pg_cron).
+4. **Sur chaque appareil** : Réglages › Notifications › **Activer sur cet appareil**, puis « Envoyer une notification de test ».
+   - **iPhone / iPad** (iOS 16.4 ou plus récent) : il faut d'abord **installer** la plateforme (Safari › Partager › Sur l'écran d'accueil) et l'ouvrir depuis son icône.
+   - **Ordinateur** : Chrome ou Edge (Safari sur Mac fonctionne aussi).
+
 ## Développement
 
 ```bash
@@ -73,3 +86,5 @@ python3 build.py      # construit dist/ (index.html, manifest, service worker, i
 - `src/quotes.json` : citations du tableau de bord
 - `public/` : manifest, service worker, icônes
 - `supabase/schema.sql` : tables, règles d'accès et stockage des photos
+- `supabase/notifications.sql` : rappels programmés et envoi automatique
+- `supabase/functions/prettycrea-notifier/` : fonction d'envoi des notifications (Web Push)

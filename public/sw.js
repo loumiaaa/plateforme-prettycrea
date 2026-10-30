@@ -43,3 +43,25 @@ self.addEventListener('fetch', (event) => {
   }
   // Tout le reste (API Supabase) passe directement par le réseau.
 });
+
+// Notifications : affichage et ouverture de la plateforme au toucher.
+self.addEventListener('push', (event) => {
+  let n = {};
+  try { n = event.data ? event.data.json() : {}; } catch { n = { body: event.data && event.data.text() }; }
+  event.waitUntil(self.registration.showNotification(n.title || 'PrettyCrea', {
+    body: n.body || '',
+    icon: 'icons/icon-192.png',
+    badge: 'icons/icon-192.png',
+    tag: n.tag,
+    data: { url: n.url || './' },
+  }));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = new URL(event.notification.data && event.notification.data.url || './', self.registration.scope).href;
+  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+    for (const c of list) if (c.url.startsWith(self.registration.scope)) { c.focus(); return c.navigate ? c.navigate(target) : null; }
+    return self.clients.openWindow(target);
+  }));
+});
