@@ -1070,12 +1070,18 @@ body { background-attachment: scroll; }
   .quick-new:hover { filter: brightness(1.18); }
 }
 @media (max-width: 900px) {
-  .quick-new { margin-left: auto; min-height: 44px; padding: 0.4em 0.85em; gap: 0.35em; background: var(--accent) !important; border-color: var(--brass-soft) !important; color: #e2d7f5 !important; font-size: 0.92rem; }
+  .quick-new { margin-left: auto; min-height: 44px; padding: 0.4em 1em; gap: 0.4em; background: var(--accent) !important; border-color: var(--brass-soft) !important; color: #e2d7f5 !important; font-size: 0.92rem; }
   .quick-new + .tabs + .top-actions { margin-left: 0; }
-  .quick-new-label { font-size: 0; }
-  .quick-new-label::before { content: "Nouveau"; font-size: 0.92rem; }
 }
-@media (max-width: 360px) { .quick-new-label { display: none; } .quick-new { padding-inline: 0.7em; } }
+/* Téléphone : bouton rond « + », la photo et le prénom gardent leur place */
+@media (max-width: 560px) {
+  .topbar-in { gap: 10px; }
+  .quick-new { width: 44px; height: 44px; padding: 0; border-radius: 50%; flex: none; }
+  .quick-new .ico { width: 1.35em; height: 1.35em; }
+  .quick-new-label { display: none; }
+  .brand { min-width: 0; flex: 0 1 auto; overflow: hidden; }
+  .brand-name { overflow: hidden; text-overflow: ellipsis; }
+}
 
 /* 4. Bandeau démo : une seule ligne sur téléphone */
 @media (max-width: 640px) {
@@ -1118,8 +1124,10 @@ body { background-attachment: scroll; }
 
 /* 8. Fiche projet : formulaire aligné, en-tête compact, sommaire des sections */
 .field { align-content: start; }
+.sheet-head, .sheet-foot { flex: none; }
+.sheet-body { flex: 1 1 auto; min-height: 0; }
 .sheet-steps {
-  position: relative; z-index: 1; display: flex; gap: 6px; flex-wrap: wrap; padding: 16px 24px 10px;
+  flex: none; position: relative; z-index: 1; display: flex; gap: 6px; flex-wrap: wrap; padding: 16px 24px 10px;
   background: var(--card); border-bottom: 1px solid var(--line);
 }
 .sheet-steps .step {
