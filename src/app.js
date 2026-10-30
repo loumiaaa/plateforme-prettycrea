@@ -288,6 +288,8 @@ const DEFAULT_SETTINGS = {
   autoLock: 15,
   autoNeedle: false,
   calView: '',
+  profileName: '',
+  profilePhoto: '',
   notifDaily: true,
   notifHour: '08:30',
   notifBefore: 0,
@@ -1603,7 +1605,7 @@ function renderShell() {
   <a class="skip" href="#view" data-action="skip">Aller au contenu</a>
   <header class="topbar">
     <div class="topbar-in wrap">
-      <a class="brand" href="#bibliotheque"><span class="brand-mark" aria-hidden="true">PC</span><span class="brand-name">PrettyCrea</span></a>
+      <a class="brand" href="#bibliotheque">${S().profilePhoto ? photoImg(S().profilePhoto, 'brand-avatar', '') : '<span class="brand-mark" aria-hidden="true">PC</span>'}<span class="brand-text"><span class="brand-name">${esc(S().profileName || 'PrettyCrea')}</span>${S().profileName ? '<span class="brand-sub">PrettyCrea</span>' : ''}</span></a>
       <nav class="tabs" aria-label="Espaces">
         <p class="nav-label" aria-hidden="true">Espaces</p>
         ${NAV.map((n) => `${n.id === 'reglages' ? '<p class="nav-label nav-label-end" aria-hidden="true">Paramètres</p>' : ''}<a class="tab" href="#${n.id}" data-nav="${n.id}">${icon(n.icon)}<span>${n.label}</span></a>`).join('')}
@@ -1643,7 +1645,7 @@ function render(fresh = false) {
   const a = document.activeElement;
   const focusKey = !fresh && a && v.contains(a) ? (a.id ? '#' + CSS.escape(a.id) : a.dataset.action ? `[data-action="${a.dataset.action}"]${a.dataset.id ? `[data-id="${a.dataset.id}"]` : ''}${a.dataset.date ? `[data-date="${a.dataset.date}"]` : ''}${a.dataset.view ? `[data-view="${a.dataset.view}"]` : ''}${a.dataset.kind ? `[data-kind="${a.dataset.kind}"]` : ''}` : null) : null;
   v.innerHTML = VIEWS[APP.route]();
-  hydratePhotos(v);
+  hydratePhotos(document);
   if (APP.route === 'reglages') renderNotifStatus();
   document.title = `${TITLES[APP.route]} · PrettyCrea`;
   if (focusKey) { const el = $(focusKey, v); if (el) el.focus({ preventScroll: true }); }
@@ -2187,6 +2189,32 @@ function requestClose() {
   $('[data-action="keep-editing"]', z).focus();
 }
 
+function refreshShell() {
+  const y = window.scrollY;
+  renderShell(); route(); hydratePhotos(document);
+  window.scrollTo(0, y);
+}
+async function onProfilePhoto(file) {
+  const img = new Image();
+  const url = URL.createObjectURL(file);
+  await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+  const side = Math.min(img.width, img.height);
+  const sx = (img.width - side) / 2, sy = Math.max(0, (img.height - side) * 0.3); // un peu vers le haut : le visage
+  const c = document.createElement('canvas');
+  c.width = c.height = 320;
+  c.getContext('2d').drawImage(img, sx, sy, side, side, 0, 0, 320, 320);
+  URL.revokeObjectURL(url);
+  if (APP.mode === 'private' && SYNC.email) {
+    const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.86));
+    S().profilePhoto = await storePhoto(blob);
+  } else {
+    S().profilePhoto = c.toDataURL('image/jpeg', 0.86);
+  }
+  APP.state.settingsAt = Date.now();
+  save();
+  refreshShell();
+  toast('Photo de profil enregistrée');
+}
 function photoSlot(src) {
   return src ? photoImg(src, 'photo-prev', 'Photo du projet') : `<div class="photo-empty" aria-hidden="true">${icon('image')}</div>`;
 }
@@ -2505,6 +2533,20 @@ function viewReglages() {
   const priv = APP.mode === 'private';
   const left = `
     ${pageHead('À ta façon', 'Réglages')}<!--/head-->
+    <section class="card" aria-labelledby="s-profil">
+      ${cardHead('feather', 'Profil', '', 's-profil')}
+      <div class="profile-row">
+        <span class="profile-pic">${s.profilePhoto ? photoImg(s.profilePhoto, '', 'Ta photo de profil') : `<span class="brand-mark" aria-hidden="true">PC</span>`}</span>
+        <div class="profile-fields">
+          <div class="field"><label for="set-profileName">Prénom affiché</label><input class="input" id="set-profileName" data-setting="profileName" value="${esc(s.profileName || '')}" placeholder="Lucile" autocomplete="given-name"></div>
+          <div class="btn-row">
+            <span class="btn sm file-btn">${icon('image')} ${s.profilePhoto ? 'Changer la photo' : 'Ajouter ma photo'}<input type="file" id="profile-photo" accept="image/*" aria-label="Choisir une photo de profil"></span>
+            ${s.profilePhoto ? `<button type="button" class="btn sm ghost" data-action="profile-photo-remove">${icon('trash')} Retirer</button>` : ''}
+          </div>
+        </div>
+      </div>
+      <p class="small muted">Ta photo apparaît en haut à gauche, à côté de ton prénom.${APP.mode === 'private' && SYNC.email ? ' Elle est chiffrée et synchronisée sur tes appareils, comme le reste.' : ''}</p>
+    </section>
     <section class="card" aria-labelledby="s-display">
       ${cardHead('eye', 'Affichage', '', 's-display')}
       <div>
@@ -2601,6 +2643,7 @@ function onSettingChange(el) {
   if (key === 'dayEnd' && S().dayStart >= val) S().dayStart = Math.max(0, val - 1);
   if (['ambiance', 'font', 'size', 'motion', 'orn'].includes(key)) { applyDisplay(); savePrefs(); }
   if (key === 'autoLock') armAutoLock();
+  if (key === 'profileName') { S().profileName = String(val).trim().slice(0, 30); refreshShell(); }
   save();
   if (el.type === 'radio' || el.tagName === 'SELECT') render();
 }
@@ -2710,6 +2753,7 @@ function toast(message, undo) {
 const ACTIONS = {
   'enter-demo': () => enterDemo(),
   'lock-tab': (el) => { APP.lockTab = el.dataset.view; renderLock(); },
+  'profile-photo-remove': () => { S().profilePhoto = ''; APP.state.settingsAt = Date.now(); save(); refreshShell(); },
   'notif-on': async (el) => {
     el.disabled = true;
     try { await enableNotifications(); toast('Notifications activées sur cet appareil.'); }
@@ -2864,6 +2908,7 @@ document.addEventListener('click', (e) => {
 document.addEventListener('change', (e) => {
   const el = e.target;
   if (el.matches('[data-show-pw]')) { $$('input[type="password"], input[data-was-pw]').forEach((i) => { i.type = el.checked ? 'text' : 'password'; i.toggleAttribute('data-was-pw', true); }); return; }
+  if (el.id === 'profile-photo') { const f = el.files && el.files[0]; if (f) onProfilePhoto(f).catch(() => toast("Cette image n'a pas pu être lue. Essaie un fichier JPG ou PNG.")); return; }
   if (el.matches('[data-setting]')) { onSettingChange(el); return; }
   if (el.matches('[data-item]')) {
     const it = APP.state.inventory.items.find((x) => x.id === el.dataset.item);
