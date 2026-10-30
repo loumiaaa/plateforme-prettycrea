@@ -316,7 +316,7 @@ function normProject(p) {
   p.client = { name: '', instagram: '', other: '', ...(p.client || {}) };
   p.deposit = { enabled: false, amount: 0, due: '', paidOn: '', ...(p.deposit || {}) };
   p.final = { paidOn: '', ...(p.final || {}) };
-  p.sketch = { due: '', remindDays: null, sent: false, ...(p.sketch || {}) };
+  p.sketch = { due: '', remindDays: null, remindDate: '', remindTime: '', sent: false, ...(p.sketch || {}) };
   p.status ||= 'prevu';
   p.method ||= 'paypal';
   p.duration = num(p.duration) || 3;
@@ -348,6 +348,15 @@ function normalize(s) {
   return s;
 }
 const S = () => APP.state.settings;
+/* Rappel de croquis : X jours avant le rendu, ou à une date précise, à l'heure choisie. */
+function sketchRemindOn(p) {
+  const k = p.sketch;
+  if (!k.due || k.sent) return null;
+  if (k.remindDate) return k.remindDate;
+  if (k.remindDays === null || k.remindDays === '') return null;
+  return addDays(k.due, -Number(k.remindDays));
+}
+const sketchRemindTime = (p) => p.sketch.remindTime || S().notifHour || '08:30';
 function recomputeStock(s = APP.state) {
   for (const it of s.inventory.items) {
     it.qty = Math.max(0, Math.round(it.base + s.inventory.log.filter((l) => l.itemId === it.id).reduce((t, l) => t + num(l.delta), 0)));
@@ -455,7 +464,8 @@ function reminders() {
   const out = [];
   for (const p of active()) {
     const sk = p.sketch;
-    if (sk.due && !sk.sent && sk.remindDays !== null && sk.remindDays !== '' && t >= addDays(sk.due, -Number(sk.remindDays))) {
+    const on = sketchRemindOn(p);
+    if (on && t >= on) {
       const n = diffDays(t, sk.due);
       out.push({ rank: n, level: n < 0 ? 'late' : 'soon', icon: 'pencil', id: p.id,
         title: `Croquis pour ${clientLabel(p)}`, sub: n < 0 ? `En retard : prévu le ${fmtLong(sk.due)}` : `À envoyer ${rel(n)} (${fmtShort(sk.due)})` });
@@ -1193,7 +1203,7 @@ function notifPlan() {
       const parts = [];
       const rdv = active().filter((p) => p.date === d && p.status === 'prevu').sort(byDateTime);
       if (rdv.length) parts.push(named ? `Rendez-vous : ${rdv.map((p) => `${clientLabel(p)} ${fmtTime(p.time)}`).join(', ')}` : `${plural2(rdv.length, 'rendez-vous', 'rendez-vous')} (${rdv.map((p) => fmtTime(p.time)).join(', ')})`);
-      const sk = active().filter((p) => p.sketch.due && !p.sketch.sent && p.sketch.remindDays !== null && p.sketch.remindDays !== '' && d >= addDays(p.sketch.due, -Number(p.sketch.remindDays)) && d <= p.sketch.due);
+      const sk = active().filter((p) => { const on = sketchRemindOn(p); return on && d >= on && d <= p.sketch.due; });
       if (sk.length) parts.push(named ? `Croquis à envoyer : ${sk.map(clientLabel).join(', ')}` : plural2(sk.length, 'croquis à envoyer', 'croquis à envoyer'));
       const dep = allPayments().filter((x) => !x.paidOn && x.kind === 'deposit' && x.p.status !== 'annule' && x.due <= d && diffDays(x.due, d) <= 3);
       if (dep.length) parts.push(named ? `Acompte attendu : ${dep.map((x) => `${clientLabel(x.p)} (${money(x.amount)})`).join(', ')}` : plural2(dep.length, 'acompte attendu', 'acomptes attendus'));
@@ -1203,6 +1213,14 @@ function notifPlan() {
       if (it) { const f = forecast(it); if (f.orderBy && (f.orderBy === d || (i === 0 && f.orderBy < d))) parts.push(`Commander des ${it.name.toLowerCase()}`); }
       if (weekday(d) === 0 && !restInfo(d).ok) parts.push('Pas encore de 2e jour de repos cette semaine');
       if (parts.length) out.push({ cle: 'jour:' + d, envoyer_le: when.toISOString(), titre: weekday(d) === weekday(t) && i === 0 ? 'Ta journée' : `Ta journée · ${fmt(d, { weekday: 'long', day: 'numeric' })}`, corps: parts.join(' · '), lien: './#bibliotheque' });
+    }
+    for (const p of active().filter((x) => sketchRemindOn(x) && (sketchRemindOn(x) === d || x.sketch.due === d))) {
+      const [h, m] = sketchRemindTime(p).split(':').map(Number);
+      const w = at(d, h, m);
+      if (w <= new Date()) continue;
+      const isDue = p.sketch.due === d;
+      const when = isDue ? "aujourd'hui" : `le ${fmt(p.sketch.due, { weekday: 'long', day: 'numeric', month: 'long' })}`;
+      out.push({ cle: `croquis:${p.id}:${d}`, envoyer_le: w.toISOString(), titre: isDue ? 'Croquis à rendre aujourd’hui' : 'Rappel croquis', corps: named ? `Croquis pour ${clientLabel(p)} (${projLabel(p)}) à rendre ${when}.` : `Un croquis est à rendre ${when}.`, lien: './#agenda' });
     }
     const before = Number(s.notifBefore) || 0;
     if (before) {
@@ -1974,8 +1992,9 @@ function openProject(id, preset) {
   const durOpts = [];
   for (let h = 0.5; h <= 10; h += 0.5) durOpts.push(h);
   const remOpts = [['', 'Pas de rappel'], ['0', 'Le jour même'], ['1', '1 jour avant'], ['2', '2 jours avant'], ['3', '3 jours avant'], ['5', '5 jours avant'], ['7', '1 semaine avant'], ['14', '2 semaines avant']];
-  const rd = p.sketch.remindDays === null ? '' : String(p.sketch.remindDays);
-  if (rd && !remOpts.some(([v]) => v === rd)) remOpts.push([rd, `${rd} jours avant`]);
+  const rd = p.sketch.remindDate ? 'date' : p.sketch.remindDays === null ? '' : String(p.sketch.remindDays);
+  if (rd && rd !== 'date' && !remOpts.some(([v]) => v === rd)) remOpts.push([rd, `${rd} jours avant`]);
+  remOpts.push(['date', 'À une date précise…']);
   const hasExtra = !!(p.notes || p.photo);
   const sheet = $('#sheet');
   sheet.innerHTML = `<form class="sheet-form" id="pf" novalidate>
@@ -2091,7 +2110,7 @@ function openProject(id, preset) {
 
       <fieldset>
         <legend>Croquis</legend>
-        <div class="grid-2">
+        <div class="grid-3">
           <div class="field">
             <label for="f-sk-due">Date de rendu du croquis</label>
             <input class="input" type="date" id="f-sk-due" name="skDue" value="${esc(p.sketch.due)}">
@@ -2100,7 +2119,16 @@ function openProject(id, preset) {
             <label for="f-sk-rem">Me le rappeler</label>
             <select class="select" id="f-sk-rem" name="skRemind">${remOpts.map(([v, l]) => `<option value="${v}" ${v === rd ? 'selected' : ''}>${l}</option>`).join('')}</select>
           </div>
+          <div class="field" id="sk-time-box" ${rd === '' ? 'hidden' : ''}>
+            <label for="f-sk-time">À</label>
+            <input class="input" type="time" id="f-sk-time" name="skRemTime" step="300" value="${esc(p.sketch.remindTime || S().notifHour || '08:30')}">
+          </div>
         </div>
+        <div class="field" id="sk-date-box" ${rd === 'date' ? '' : 'hidden'}>
+          <label for="f-sk-date">Date du rappel</label>
+          <input class="input" type="date" id="f-sk-date" name="skRemDate" value="${esc(p.sketch.remindDate || '')}">
+        </div>
+        <p class="small muted" id="sk-hint" aria-live="polite"></p>
         <label class="check"><input type="checkbox" id="f-sk-sent" name="skSent" ${p.sketch.sent ? 'checked' : ''}> Croquis envoyé à la cliente</label>
       </fieldset>
 
@@ -2176,7 +2204,14 @@ function readForm(f) {
   const depOn = f.elements.depOn.checked;
   p.deposit = { enabled: depOn, amount: depOn ? num(v('depAmount')) : 0, due: depOn ? v('depDue') : '', paidOn: depOn && f.elements.depPaid.checked ? (v('depPaidOn') || today()) : '' };
   p.final = { paidOn: f.elements.finPaid.checked ? (v('finPaidOn') || p.date) : '' };
-  p.sketch = { due: v('skDue'), remindDays: v('skRemind') === '' ? null : Number(v('skRemind')), sent: f.elements.skSent.checked };
+  const rem = v('skRemind');
+  p.sketch = {
+    due: v('skDue'),
+    remindDays: rem === '' || rem === 'date' ? null : Number(rem),
+    remindDate: rem === 'date' ? v('skRemDate') : '',
+    remindTime: rem === '' ? '' : v('skRemTime'),
+    sent: f.elements.skSent.checked,
+  };
   p.notes = f.elements.notes.value;
   return p;
 }
@@ -2187,6 +2222,11 @@ function onFormInput(e) {
   if (e.target.name === 'depPaid') { $('#dep-paid-box').hidden = !e.target.checked; if (e.target.checked && !$('#f-dep-paidon').value) $('#f-dep-paidon').value = today(); }
   if (e.target.name === 'finPaid') { $('#fin-paid-box').hidden = !e.target.checked; if (e.target.checked) $('#f-fin-paidon').value = $('#f-fin-paidon').value || $('#f-date').value || today(); }
   if (e.target.name === 'date' && !$('#f-fin-paid').checked) $('#f-fin-paidon').value = e.target.value;
+  if (e.target.name === 'skRemind') {
+    $('#sk-date-box').hidden = e.target.value !== 'date';
+    $('#sk-time-box').hidden = e.target.value === '';
+    if (e.target.value === 'date' && !$('#f-sk-date').value) $('#f-sk-date').value = $('#f-sk-due').value ? addDays($('#f-sk-due').value, -1) : today();
+  }
   if (e.target.id && e.target.getAttribute('aria-invalid')) { e.target.removeAttribute('aria-invalid'); }
   readForm(f);
   updateFormHints();
@@ -2214,6 +2254,16 @@ function updateFormHints() {
     }
   }
   if (p.deposit.enabled && p.deposit.amount > p.price && p.price > 0) warn.push("L'acompte est plus élevé que le prix total.");
+  const hint = $('#sk-hint');
+  if (hint) {
+    const on = sketchRemindOn(p);
+    const lw = (iso) => fmt(iso, { weekday: 'long', day: 'numeric', month: 'long' });
+    hint.textContent = p.sketch.sent ? 'Croquis envoyé : plus de rappel.'
+      : !p.sketch.due ? (p.sketch.remindDays !== null || p.sketch.remindDate ? 'Indique la date de rendu pour programmer le rappel.' : '')
+      : !on ? 'Pas de rappel pour ce croquis.'
+      : on > p.sketch.due ? 'Le rappel tombe après la date de rendu : choisis une date plus tôt.'
+      : `Rappel le ${lw(on)} à ${fmtTime(sketchRemindTime(p))}${on < p.sketch.due ? `, puis le jour du rendu (${lw(p.sketch.due)}) si le croquis n’est pas encore envoyé` : ''}.`;
+  }
   const box = $('#pf-warn');
   if (box) box.innerHTML = calm.map((w) => `<div class="notice calm">${icon('moon')}<p>${esc(w)}</p></div>`).join('')
     + warn.map((w) => `<div class="notice warn">${icon('alert')}<p>${esc(w)}</p></div>`).join('');
