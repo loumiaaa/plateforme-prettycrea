@@ -991,3 +991,10 @@ body { background-attachment: scroll; }
 }
 .recovery-input { font-family: var(--f-type, "Courier New", monospace); letter-spacing: 0.06em; text-transform: uppercase; }
 .door form .linkish { justify-self: start; }
+
+/* Aperçu d'une notification (Réglages) */
+.notif-preview { display: grid; gap: 8px; }
+.notif-card { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 14px; background: rgba(255, 250, 238, 0.7); border: 1px solid var(--line-strong); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12); }
+.notif-card p { margin-top: 2px; }
+.notif-ic { display: inline-grid; place-items: center; flex: none; width: 34px; height: 34px; border-radius: 8px; background: #6b2230; color: #f3e2c0; }
+.notif-ic .ico { width: 18px; height: 18px; }

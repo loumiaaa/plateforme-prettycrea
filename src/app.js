@@ -1236,11 +1236,23 @@ async function sendTestNotification() {
   await sb.from(NOTIF_TABLE).insert({ user_id: SYNC.uid, cle, envoyer_le: new Date().toISOString(), titre: 'PrettyCrea', corps: 'Les notifications fonctionnent sur cet appareil.', lien: './#reglages' });
   try { await sb.functions.invoke('prettycrea-notifier', { body: {} }); } catch {}
 }
+function renderNotifPreview() {
+  const box = $('#notif-preview');
+  if (!box) return;
+  const next = notifPlan()[0];
+  box.innerHTML = next
+    ? `<p class="eyebrow">Aperçu de la prochaine notification</p>
+       <div class="notif-card"><span class="notif-ic">${icon('alert')}</span><div><strong>${esc(next.titre)}</strong><p>${esc(next.corps)}</p>
+       <p class="faint small">${esc(cap(new Date(next.envoyer_le).toLocaleString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })))}</p></div></div>`
+    : `<p class="small muted">Rien à signaler pour les trois prochaines semaines.</p>`;
+}
 async function renderNotifStatus() {
   const box = $('#notif-status');
   if (!box) return;
+  renderNotifPreview();
   let html;
-  if (!PUSH_OK()) html = `<p class="small">Ce navigateur ne gère pas les notifications. Sur ordinateur, utilise Chrome ou Edge ; sur iPhone et iPad, installe d'abord la plateforme.</p>`;
+  if (APP.mode === 'demo') html = `<p class="small">Dans la démo, tu peux régler les notifications et voir leur aperçu, mais pas les recevoir. Dans l'espace privé, Lucile les active sur chacun de ses appareils.</p>`;
+  else if (!PUSH_OK()) html = `<p class="small">Ce navigateur ne gère pas les notifications. Sur ordinateur, utilise Chrome ou Edge ; sur iPhone et iPad, installe d'abord la plateforme.</p>`;
   else if (isIOS() && !isStandalone()) html = `<p class="small"><strong>Sur iPhone et iPad, il faut d'abord installer la plateforme :</strong> bouton Partager › « Sur l'écran d'accueil ». Ouvre-la ensuite depuis son icône et reviens ici.</p>`;
   else if (Notification.permission === 'denied') html = `<p class="small">Les notifications sont bloquées pour ce site. Autorise-les dans les réglages du navigateur (ou de l'appareil), puis reviens ici.</p>`;
   else {
@@ -2476,9 +2488,10 @@ function viewReglages() {
       ${cardHead('needle', 'Réserves', '', 's-inv')}
       <div class="set-row"><span class="label" id="lbl-autoNeedle">Retirer une aiguille quand un projet passe à « Réalisé »</span>${opt('autoNeedle', s.autoNeedle, [['false', 'Non'], ['true', 'Oui']])}</div>
     </section>
-    ${SYNC.email ? `<section class="card" aria-labelledby="s-notif">
+    ${SYNC.email || APP.mode === 'demo' ? `<section class="card" aria-labelledby="s-notif">
       ${cardHead('alert', 'Notifications', '', 's-notif')}
       <div id="notif-status"><p class="small muted">Vérification…</p></div>
+      <div class="notif-preview" id="notif-preview"></div>
       <div>
         <div class="set-row"><span class="label" id="lbl-notifDaily">Résumé du jour<span class="hint">Une seule notification par jour, seulement s'il y a quelque chose.</span></span>${opt('notifDaily', s.notifDaily !== false, [['true', 'Oui'], ['false', 'Non']])}</div>
         <div class="set-row"><label class="label" for="set-notifHour">Heure du résumé</label><input class="input" type="time" id="set-notifHour" data-setting="notifHour" value="${esc(s.notifHour || '08:30')}"></div>
