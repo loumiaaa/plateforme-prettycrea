@@ -1174,3 +1174,107 @@ body { background-attachment: scroll; }
 
 /* 12. Accueil : état vide avec action */
 .card .empty-box { background: transparent; box-shadow: none; }
+
+/* =========================================================
+   Clientes, demandes, séances, livre des recettes
+   ========================================================= */
+.mobile-only { display: none !important; }
+@media (max-width: 900px) {
+  .mobile-only { display: inline-flex !important; }
+  /* Barre du bas : 5 espaces, les réglages passent en haut à droite */
+  .tab[data-nav="reglages"] { display: none !important; }
+}
+
+/* Onglets Fiches / Demandes */
+.tab-seg { align-self: start; }
+.tab-seg .count, .card .count {
+  display: inline-grid; place-items: center; min-width: 1.6em; height: 1.6em; padding: 0 0.4em; border-radius: 999px;
+  background: var(--card-2); color: var(--ink-soft); font-size: 0.8rem; font-weight: 700; font-family: var(--f-legible);
+}
+.tab-seg button[aria-pressed="true"] .count { background: var(--card); color: var(--ink); }
+.space-head .tab-seg { background: rgba(244, 238, 255, 0.08); border-color: var(--head-line, var(--line)); }
+.space-head .tab-seg button { color: var(--head-soft, var(--ink-soft)); }
+.space-head .tab-seg button[aria-pressed="true"] { background: var(--card); color: var(--ink); }
+@media (max-width: 560px) {
+  .tab-seg { display: grid; grid-template-columns: 1fr 1fr; width: 100%; border-radius: 14px; }
+  .tab-seg button { border-radius: 10px; padding-inline: 0.4em; font-size: 0.86rem; line-height: 1.15; text-align: center; }
+  .tab-seg button .ico { display: none; }
+}
+
+/* Liste des clientes */
+.client-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 520px; overflow-y: auto; overscroll-behavior: contain; }
+.client-item {
+  width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px;
+  padding: 10px 12px; min-height: 56px; border: 1px solid transparent; border-radius: 10px; background: transparent;
+  color: var(--ink); text-align: left; cursor: pointer; font: inherit;
+}
+.client-item:hover { background: var(--card-2); }
+.client-item.is-sel { background: var(--card-2); border-color: var(--line-strong); box-shadow: inset 3px 0 0 var(--accent); }
+.client-main { display: grid; min-width: 0; }
+.client-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.client-main span { color: var(--ink-faint); font-size: 0.88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.client-avatar {
+  flex: none; display: inline-grid; place-items: center; width: 40px; height: 40px; border-radius: 50%;
+  background: var(--accent); color: var(--accent-ink); font-family: var(--f-display); font-weight: 700; font-size: 0.9rem; letter-spacing: 0.04em;
+}
+.client-avatar.lg { width: 64px; height: 64px; font-size: 1.3rem; }
+.client-id { display: flex; align-items: center; gap: 16px; }
+.client-id .card-title { margin: 0; }
+.client-card { display: grid; gap: 16px; }
+.client-card:focus { outline: none; }
+.client-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.ctile { display: grid; gap: 2px; padding: 12px 14px; border-radius: 10px; background: var(--card-2); border: 1px solid var(--line); }
+.ctile span { color: var(--ink-faint); font-size: 0.82rem; }
+.ctile strong { font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+.inline-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 12px; align-items: end; }
+@media (max-width: 640px) {
+  .client-list { max-height: 50vh; }
+  .client-tiles { gap: 8px; }
+  .ctile { padding: 10px; }
+  .ctile strong { font-size: 1rem; }
+  .inline-form { grid-template-columns: 1fr; }
+  .inline-form .btn { width: 100%; }
+  .client-card .btn-row .btn { flex: 1 1 auto; }
+}
+
+/* Demandes : colonnes par étape */
+.kanban { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.kan-col { display: grid; gap: 12px; align-content: start; }
+.req-card { display: grid; gap: 10px; padding: 14px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--card-2); }
+.req-head { display: flex; align-items: center; gap: 10px; }
+.req-who { display: grid; min-width: 0; }
+.req-idea { margin: 0; font-weight: 600; line-height: 1.4; }
+.req-card .btn-row { gap: 6px; }
+.req-card .field { gap: 4px; }
+@media (max-width: 1180px) { .kanban { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 640px) { .req-card .btn-row .btn { flex: 1 1 auto; } }
+
+/* Séances d'un même projet (fiche projet) */
+.sessions { display: grid; gap: 10px; }
+.session-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; counter-reset: s; }
+.session {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 44px; padding: 8px 12px;
+  border: 1px solid var(--line-strong); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; text-align: left; cursor: pointer;
+}
+.session:hover:not(:disabled) { border-color: var(--ink-soft); }
+.session.is-current { background: var(--card-2); border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); cursor: default; }
+
+/* Livre des recettes */
+.book-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.book-table th, .book-table td { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: left; }
+.book-table thead th { font-size: 0.82rem; color: var(--ink-faint); font-weight: 700; }
+.book-table td:last-child, .book-table th:last-child { text-align: right; }
+.book-table tbody th { font-weight: 600; }
+.book-table tfoot th, .book-table tfoot td { font-weight: 700; border-bottom: 0; border-top: 2px solid var(--line-strong); }
+.book-table.detail td { font-size: 0.92rem; }
+@media (max-width: 640px) {
+  .book-table th, .book-table td { padding: 8px 6px; }
+  .book-table.detail td:nth-child(4), .book-table.detail th:nth-child(4) { display: none; }
+}
+.table-wrap { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.col > .card, .space > .card { min-width: 0; }
+@media (max-width: 640px) { .book-table.detail { min-width: 520px; } }
+.book-card { grid-template-columns: minmax(0, 1fr); }
+.book-card .card-head { flex-wrap: wrap; row-gap: 8px; }
+@media (max-width: 640px) { .book-card .btn-row .btn { width: 100%; white-space: normal; text-align: center; } }
+@media (min-width: 901px) { .top-actions .round.mobile-only { display: none !important; } }

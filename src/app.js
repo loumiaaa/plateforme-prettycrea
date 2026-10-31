@@ -64,6 +64,9 @@ const ICONS = {
   clock: '<circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/>',
   feather: '<path d="M19.5 4.5c-6.5.5-11 5-12 12.5L5 20"/><path d="M8.5 14.5c3.5 0 6.5-1.5 8.5-4.5"/>',
   eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.5"/>',
+  users: '<circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19.5c.6-3.3 2.8-5 5.5-5s4.9 1.7 5.5 5"/><circle cx="16.5" cy="9.5" r="2.5"/><path d="M15.5 14.6c2.6-.2 4.4 1.3 5 4.4"/>',
+  inbox: '<path d="M4 13.5 6.5 5h11L20 13.5V19H4z"/><path d="M4 13.5h4.5l1.2 2.2h4.6l1.2-2.2H20"/>',
+  layers: '<path d="m12 4 8 4-8 4-8-4z"/><path d="m4 12 8 4 8-4"/><path d="m4 16 8 4 8-4"/>',
   book: '<path d="M12 6.5C10 5 7 4.5 3.5 5v13c3.5-.5 6.5 0 8.5 1.5 2-1.5 5-2 8.5-1.5V5c-3.5-.5-6.5 0-8.5 1.5z"/><path d="M12 6.5v13"/>',
 };
 const icon = (n, cls = '') => `<svg class="ico ${cls}" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${ICONS[n] || ''}</svg>`;
@@ -312,7 +315,7 @@ function newItem(o = {}) {
   return { id: uid(), name: 'Aiguilles', unit: 'aiguilles', qty: 0, base: 0, perProject: 1, deliveryDays: 7, alertAt: 10, ...o };
 }
 function emptyState() {
-  return { v: 2, projects: [], rest: {}, tomb: {}, settingsAt: 0, inventory: { items: [newItem({ updatedAt: Date.now() })], log: [] }, settings: { ...DEFAULT_SETTINGS } };
+  return { v: 2, projects: [], clients: [], requests: [], rest: {}, tomb: {}, settingsAt: 0, inventory: { items: [newItem({ updatedAt: Date.now() })], log: [] }, settings: { ...DEFAULT_SETTINGS } };
 }
 function normProject(p) {
   p.client = { name: '', instagram: '', other: '', ...(p.client || {}) };
@@ -336,6 +339,10 @@ function normalize(s) {
   if (!s.rest) { s.rest = {}; (s.restDays || []).forEach((d) => { s.rest[d] = { on: true, at: 0 }; }); }
   delete s.restDays;
   s.tomb = s.tomb || {};
+  s.clients = (s.clients || []).map((c) => ({ name: '', instagram: '', other: '', notes: '', createdAt: '', updatedAt: 0, ...c }));
+  s.requests = (s.requests || []).map((r) => ({ name: '', instagram: '', idea: '', placement: '', size: '', budget: '', wanted: '', notes: '', status: 'nouvelle', projectId: '', clientId: '', createdAt: new Date().toISOString(), updatedAt: 0, ...r }));
+  // Chaque projet est rattaché à une fiche cliente (identifiant stable, le même sur tous les appareils).
+  for (const p of s.projects) if (!p.clientId && (p.client.name || p.client.instagram)) p.clientId = ensureClientIn(s, p.client).id;
   s.settingsAt = s.settingsAt || 0;
   s.inventory = s.inventory || { items: [], log: [] };
   s.inventory.log = (s.inventory.log || []).map((l) => ({ at: 0, ...l }));
@@ -350,6 +357,39 @@ function normalize(s) {
   return s;
 }
 const S = () => APP.state.settings;
+
+/* ---------- Fiches clientes ---------- */
+function hashKey(str) { let h = 0x811c9dc5; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(36); }
+function ensureClientIn(s, info, touch = false) {
+  const name = String(info.name || '').trim(), ig = String(info.instagram || '').replace(/^@+/, '').trim();
+  const low = (x) => String(x || '').trim().toLowerCase();
+  let c = (ig && s.clients.find((x) => low(x.instagram) === low(ig))) || (name && s.clients.find((x) => low(x.name) === low(name) && (!ig || !x.instagram)));
+  if (!c) {
+    c = { id: 'cl_' + hashKey(ig ? 'ig:' + low(ig) : 'nm:' + low(name)), name, instagram: ig, other: info.other || '', notes: '', createdAt: new Date().toISOString(), updatedAt: touch ? Date.now() : 0 };
+    const twin = s.clients.find((x) => x.id === c.id);
+    if (twin) return twin;
+    s.clients.push(c);
+  } else if (touch && ((ig && !c.instagram) || (info.other && !c.other))) {
+    if (ig && !c.instagram) c.instagram = ig;
+    if (info.other && !c.other) c.other = info.other;
+    c.updatedAt = Date.now();
+  }
+  return c;
+}
+const clientById = (id) => APP.state.clients.find((c) => c.id === id);
+const projectsOfClient = (c) => APP.state.projects.filter((p) => p.clientId === c.id);
+
+/* ---------- Projets en plusieurs séances ---------- */
+function sessionsOf(p) {
+  if (!p.groupId) return [p];
+  const all = APP.state.projects.filter((x) => x.groupId === p.groupId);
+  if (!all.some((x) => x.id === p.id)) all.push(p);
+  return all.sort(byDateTime);
+}
+function sessionInfo(p) {
+  const all = sessionsOf(p);
+  return all.length < 2 ? null : { n: all.length, i: all.findIndex((x) => x.id === p.id) + 1, all };
+}
 /* Rappel de croquis : X jours avant le rendu, ou à une date précise, à l'heure choisie. */
 function sketchRemindOn(p) {
   const k = p.sketch;
@@ -375,7 +415,7 @@ const upcoming = () => active().filter((p) => p.status === 'prevu' && (p.date > 
 const nowMin = () => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); };
 const findP = (id) => APP.state.projects.find((p) => p.id === id);
 const clientLabel = (p) => p.client.name || 'Cliente sans prénom';
-const projLabel = (p) => p.title || 'Projet sans titre';
+const projLabel = (p) => { const si = APP.state ? sessionInfo(p) : null; return (p.title || 'Projet sans titre') + (si ? ` · séance ${si.i}/${si.n}` : ''); };
 const isRestMarked = (d) => !!(APP.state.rest[d] && APP.state.rest[d].on);
 const methodLabel = (m) => (m === 'virement' ? 'Virement' : 'PayPal');
 
@@ -484,6 +524,8 @@ function reminders() {
         title: `Paiement final de ${clientLabel(pay.p)}`, sub: 'Pas encore noté comme reçu' });
     }
   }
+  const nouv = APP.state.requests.filter((r) => r.status === 'nouvelle');
+  if (nouv.length) out.push({ rank: 0.5, level: 'soon', icon: 'inbox', action: 'client-tab', view: 'demandes', title: nouv.length > 1 ? `${nouv.length} nouvelles demandes de projet` : `Nouvelle demande de ${nouv[0].name}`, sub: 'À lire dans Clientes' });
   const ws = startOfWeek(t);
   for (const w of [ws, addDays(ws, 7)]) {
     const info = restInfo(w);
@@ -592,8 +634,25 @@ function seedDemo() {
   mk(2, 1, '14:00', 2.5, 'Agathe', 'agathe.stars', 'Constellation, clavicule', 210, 60, 'paypal');
   mk(2, 3, '10:00', 5, 'Élise', 'elise.wyvern', 'Dragon lové, avant-bras', 650, 200, 'virement',
     { deposit: { enabled: true, amount: 200, due: addDays(t, 4), paidOn: '' }, sketch: { due: d(2, 0), remindDays: 7, sent: false } });
+  // Grande pièce en deux séances (même projet, même cliente)
+  const ely = s.projects[s.projects.length - 1];
+  ely.groupId = ely.id;
+  mk(5, 1, '10:00', 4, 'Élise', 'elise.wyvern', 'Dragon lové, avant-bras', 450, 0, 'virement',
+    { groupId: ely.id, sketch: { due: '', remindDays: null, sent: false }, notes: 'Séance 2 : couleur et ombrages.' });
   mk(3, 2, '15:00', 3, 'Mila', 'mila.gothrose', 'Rose gothique, cuisse', 350, 100, 'paypal', { deposit: { enabled: true, amount: 100, due: d(2, 2), paidOn: '' } });
   mk(5, 4, '11:00', 2, 'Ophélie', 'ophelie.letters', 'Lettrage ancien, côtes', 260, 0, 'virement');
+  const ago = (n) => new Date(Date.now() - n * 864e5).toISOString();
+  const rq = (n, name, insta, idea, extra = {}) => s.requests.push({ id: uid(), status: 'nouvelle', createdAt: ago(n), updatedAt: Date.now() - n * 864e5,
+    name, instagram: insta, idea, placement: '', size: '', budget: '', wanted: '', notes: '', projectId: '', clientId: '', ...extra });
+  rq(0, 'Lou', 'lou.nightshade', 'Chauve-souris et lune croissante', { placement: 'Derrière l’oreille', size: '5 cm', budget: '120 €' });
+  rq(2, 'Anaïs', 'anais.folklore', 'Renard et champignons, style conte', { placement: 'Mollet', wanted: 'Avant l’été', notes: 'A envoyé 3 références sur Instagram.' });
+  rq(5, 'Jade', 'jade.moonchild', 'Rajouter des étoiles autour de la lune', { status: 'discussion', placement: 'Cheville', budget: '80 €' });
+  rq(9, 'Capucine', 'capucine.inkwell', 'Épée et lierre le long de la colonne', { status: 'croquis', size: '25 cm', budget: '500 €', wanted: 'Septembre' });
+  rq(20, 'Romane', 'romane.ink', 'Portrait réaliste', { status: 'refusee', notes: 'Pas mon style, redirigée vers une collègue.' });
+  for (const p of s.projects) p.clientId = ensureClientIn(s, p.client).id;
+  for (const r of s.requests) r.clientId = ensureClientIn(s, { name: r.name, instagram: r.instagram, other: '' }).id;
+  const emma = s.clients.find((c) => c.instagram === 'emma.inkdreams');
+  if (emma) emma.notes = 'Peau réactive : appliquer la crème après chaque séance. Aime le fine line et les fleurs.';
   s.rest = Object.fromEntries([d(0, 3), d(2, 2), d(2, 4)].map((x) => [x, { on: true, at: 0 }]));
   s.inventory.items = [newItem({ qty: 9, alertAt: 10, base: undefined })];
   s.inventory.log = [
@@ -675,6 +734,8 @@ function mergeStates(a, b) {
   };
   out.tomb = tomb;
   out.projects = mergeList(a.projects, b.projects);
+  out.clients = mergeList(a.clients, b.clients);
+  out.requests = mergeList(a.requests, b.requests);
   out.inventory.items = mergeList(a.inventory.items, b.inventory.items);
   const logs = new Map((a.inventory.log || []).map((l) => [l.id, l]));
   for (const l of b.inventory.log || []) if (!logs.has(l.id)) logs.set(l.id, l);
@@ -1594,6 +1655,7 @@ function armAutoLock() {
 const NAV = [
   { id: 'bibliotheque', label: 'Accueil', icon: 'library' },
   { id: 'agenda', label: 'Agenda', icon: 'calendar' },
+  { id: 'clientes', label: 'Clientes', icon: 'users' },
   { id: 'comptes', label: 'Comptes', icon: 'ledger' },
   { id: 'reserves', label: 'Réserves', icon: 'jar' },
   { id: 'reglages', label: 'Réglages', icon: 'sliders' },
@@ -1613,6 +1675,7 @@ function renderShell() {
       </nav>
       <div class="top-actions">
         <span id="save-status" class="save-status" aria-live="polite"></span>
+        <a class="round mobile-only" href="#reglages" aria-label="Réglages" title="Réglages">${icon('sliders')}</a>
         <button class="round" type="button" data-action="lock" aria-label="${demo ? 'Quitter la démo' : 'Verrouiller'}" title="${demo ? 'Quitter la démo' : 'Verrouiller'}">${icon(demo ? 'door' : 'lock')}<span class="lock-label">${demo ? 'Quitter la démo' : 'Verrouiller'}</span></button>
       </div>
     </div>
@@ -1636,8 +1699,8 @@ window.addEventListener('hashchange', () => {
   $('#view')?.focus({ preventScroll: true });
 });
 
-const VIEWS = { bibliotheque: viewLibrary, agenda: viewAgenda, comptes: viewComptes, reserves: viewReserves, reglages: viewReglages };
-const TITLES = { bibliotheque: 'Accueil', agenda: 'Agenda', comptes: 'Comptes', reserves: 'Réserves', reglages: 'Réglages' };
+const VIEWS = { bibliotheque: viewLibrary, agenda: viewAgenda, clientes: viewClientes, comptes: viewComptes, reserves: viewReserves, reglages: viewReglages };
+const TITLES = { bibliotheque: 'Accueil', agenda: 'Agenda', clientes: 'Clientes', comptes: 'Comptes', reserves: 'Réserves', reglages: 'Réglages' };
 
 function render(fresh = false) {
   const v = $('#view');
@@ -1675,9 +1738,10 @@ const initial = (t) => `<span class="initial" aria-hidden="true">${t.charAt(0)}<
 const SPACES = {
   bibliotheque: { no: 'I', tag: 'Bienvenue à l’atelier', art: 'bouquet' },
   agenda: { no: 'II', tag: 'Le temps des rendez-vous', art: 'moons' },
-  comptes: { no: 'III', tag: 'Ce qui entre, ce qui reste', art: 'quill' },
-  reserves: { no: 'IV', tag: 'Le cabinet des aiguilles', art: 'jar' },
-  reglages: { no: 'V', tag: 'L’atelier à ta façon', art: 'compass' },
+  clientes: { no: 'III', tag: 'Celles qui te confient leur peau', art: 'candle' },
+  comptes: { no: 'IV', tag: 'Ce qui entre, ce qui reste', art: 'quill' },
+  reserves: { no: 'V', tag: 'Le cabinet des aiguilles', art: 'jar' },
+  reglages: { no: 'VI', tag: 'L’atelier à ta façon', art: 'compass' },
 };
 const pageHead = (eyebrow, title, aside = '', tag = 'h1', extra = '') => {
   if (tag !== 'h1') return `<header class="page-head"><div class="page-head-text"><p class="eyebrow">${eyebrow}</p><${tag} class="h-title">${title}</${tag}></div>${aside ? `<div class="page-head-aside">${aside}</div>` : ''}</header>`;
@@ -1695,8 +1759,8 @@ const pageHead = (eyebrow, title, aside = '', tag = 'h1', extra = '') => {
 };
 const cardHead = (ic, title, aside = '', id = '') => `<div class="card-head"><h2 class="card-title" ${id ? `id="${id}"` : ''}><span class="ic">${icon(ic)}</span>${title}</h2>${aside}</div>`;
 const bar = (frac, cls = '') => `<div class="bar ${cls}" aria-hidden="true"><span style="width:${Math.round(Math.max(0, Math.min(1, frac)) * 100)}%"></span></div>`;
-const row = ({ ic, title, sub = '', id, amt = '', amtCls = '', check = '', level = '' }) => `<li class="row ${level}"><span class="ic">${icon(ic)}</span>
-  <button class="row-main" type="button" data-action="open-project" data-id="${id}"><span class="row-title">${esc(title)}</span>${sub ? `<span class="row-sub">${esc(sub)}</span>` : ''}</button>
+const row = ({ ic, title, sub = '', id, amt = '', amtCls = '', check = '', level = '', action = 'open-project', view = '' }) => `<li class="row ${level}"><span class="ic">${icon(ic)}</span>
+  <button class="row-main" type="button" data-action="${action}" data-id="${id || ''}" ${view ? `data-view="${view}"` : ''}><span class="row-title">${esc(title)}</span>${sub ? `<span class="row-sub">${esc(sub)}</span>` : ''}</button>
   ${amt ? `<span class="row-amt ${amtCls}">${amt}</span>` : '<span></span>'}
   ${check ? `<button class="round sm ok" type="button" data-action="mark-paid" data-id="${id}" data-kind="${check}" aria-label="Noter comme reçu : ${esc(title)}" title="Noter comme reçu">${icon('check')}</button>` : '<span></span>'}</li>`;
 const statusPill = (f) => f.status === 'now' ? `<span class="pill bad">${icon('alert')} À commander</span>` : f.status === 'soon' ? `<span class="pill warn">${icon('clock')} À commander bientôt</span>` : `<span class="pill ok">${icon('check')} Suffisant</span>`;
@@ -1759,7 +1823,7 @@ function viewLibrary() {
 
     <section class="card" aria-labelledby="c-todo">
       ${cardHead('feather', 'À ne pas oublier', rems.length ? `<span class="count">${rems.length}</span>` : '', 'c-todo')}
-      ${rems.length ? `<ul class="rows">${rems.map((r) => row({ ic: r.icon, title: r.title, sub: r.sub, id: r.id, check: r.kind || '', level: r.level, amt: r.amt || '' })).join('')}</ul>`
+      ${rems.length ? `<ul class="rows">${rems.map((r) => row({ ic: r.icon, title: r.title, sub: r.sub, id: r.id, check: r.kind || '', level: r.level, amt: r.amt || '', action: r.action || 'open-project', view: r.view || '' })).join('')}</ul>`
         : `<p class="empty">Rien d'urgent. Tout est en ordre.</p>`}
     </section>
 
@@ -1989,7 +2053,7 @@ let draftOrigDate = null;
 
 function openProject(id, preset) {
   const existing = id ? findP(id) : null;
-  draft = existing ? clone(existing) : newProject(preset);
+  draft = existing ? clone(existing) : preset && preset.template ? normProject(clone(preset.template)) : newProject(preset);
   draftOrigDate = existing ? existing.date : null;
   const p = draft;
   const isNew = !existing;
@@ -2023,7 +2087,8 @@ function openProject(id, preset) {
         <div class="grid-3">
           <div class="field">
             <label for="f-client">Prénom <span class="hint">(obligatoire)</span></label>
-            <input class="input" id="f-client" name="client" value="${esc(p.client.name)}" autocomplete="off" required aria-describedby="e-client">
+            <input class="input" id="f-client" name="client" value="${esc(p.client.name)}" autocomplete="off" list="dl-clients" required aria-describedby="e-client">
+            <datalist id="dl-clients">${APP.state.clients.map((c) => `<option value="${esc(c.name)}">${c.instagram ? '@' + esc(c.instagram) : ''}</option>`).join('')}</datalist>
             <p class="error" id="e-client"></p>
           </div>
           <div class="field">
@@ -2035,6 +2100,7 @@ function openProject(id, preset) {
             <input class="input" id="f-other" name="other" value="${esc(p.client.other)}" placeholder="TikTok, Facebook…" autocomplete="off">
           </div>
         </div>
+        ${p.clientId && clientById(p.clientId) ? `<p class="small"><button type="button" class="linkish" data-action="client-open" data-id="${p.clientId}">${icon('users')} Voir sa fiche cliente</button></p>` : ''}
         <div class="field">
           <label for="f-title">Nom du projet</label>
           <input class="input" id="f-title" name="title" value="${esc(p.title)}" placeholder="Ex. : Papillon de nuit, avant-bras">
@@ -2065,6 +2131,20 @@ function openProject(id, preset) {
           </div>
         </div>`}
       </fieldset>
+
+      ${(() => {
+        const si = isNew && !p.groupId ? null : sessionInfo(p);
+        const total = si ? si.all.reduce((t, x) => t + (x.status === 'annule' ? 0 : x.price), 0) : 0;
+        const paid = si ? si.all.flatMap(paymentsOf).filter((x) => x.paidOn).reduce((t, x) => t + x.amount, 0) : 0;
+        const st = (x) => x.status === 'fait' ? 'réalisée' : x.status === 'annule' ? 'annulée' : 'prévue';
+        return `<div class="sessions" id="pf-sessions">
+          ${si ? `<p class="label">${icon('layers')} Projet en ${si.n} séances</p>
+          <ol class="session-list">${si.all.map((x, k) => `<li><button type="button" class="session ${x.id === p.id ? 'is-current' : ''}" data-action="open-session" data-id="${x.id}" ${x.id === p.id ? 'aria-current="true" disabled' : ''}>
+            <span class="session-n">Séance ${k + 1}</span><span>${cap(fmt(x.date, { weekday: 'short', day: 'numeric', month: 'short' }))} · ${fmtTime(x.time)}</span><span class="faint small">${st(x)} · ${money(x.price)}</span></button></li>`).join('')}</ol>
+          <p class="small">Total du projet : <strong>${money(total)}</strong> · déjà réglé : <strong>${money(paid)}</strong> · reste : <strong>${money(Math.max(0, total - paid))}</strong></p>` : ''}
+          <button type="button" class="btn sm" data-action="add-session">${icon('plus')} ${si ? 'Ajouter une séance' : 'Projet en plusieurs séances ? Ajouter une séance'}</button>
+        </div>`;
+      })()}
 
       <fieldset id="fs-pay" tabindex="-1">
         <legend>Paiement</legend>
@@ -2255,6 +2335,11 @@ function onFormInput(e) {
   if (e.target.name === 'depPaid') { $('#dep-paid-box').hidden = !e.target.checked; if (e.target.checked && !$('#f-dep-paidon').value) $('#f-dep-paidon').value = today(); }
   if (e.target.name === 'finPaid') { $('#fin-paid-box').hidden = !e.target.checked; if (e.target.checked) $('#f-fin-paidon').value = $('#f-fin-paidon').value || $('#f-date').value || today(); }
   if (e.target.name === 'date' && !$('#f-fin-paid').checked) $('#f-fin-paidon').value = e.target.value;
+  if (e.target.name === 'client') {
+    const c = APP.state.clients.find((x) => x.name.toLowerCase() === e.target.value.trim().toLowerCase());
+    if (c && !$('#f-insta').value && c.instagram) $('#f-insta').value = c.instagram;
+    if (c && !$('#f-other').value && c.other) $('#f-other').value = c.other;
+  }
   if (e.target.name === 'skRemind') {
     $('#sk-date-box').hidden = e.target.value !== 'date';
     $('#sk-time-box').hidden = e.target.value === '';
@@ -2328,18 +2413,20 @@ function onPhoto(e) {
   reader.readAsDataURL(file);
 }
 
-function onFormSubmit(e) {
-  e.preventDefault();
-  const f = $('#pf');
-  const p = readForm(f);
+function validateDraft(p) {
   const errs = [];
   const setErr = (field, id, msg) => { $('#' + id).textContent = msg; if (msg) { $('#' + field).setAttribute('aria-invalid', 'true'); errs.push(field); } };
   setErr('f-client', 'e-client', p.client.name ? '' : 'Indique au moins le prénom de la cliente.');
   setErr('f-date', 'e-date', p.date ? '' : 'Choisis le jour du rendez-vous.');
   setErr('f-price', 'e-price', p.price >= 0 ? '' : 'Le prix doit être un nombre positif.');
   setErr('f-dep', 'e-dep', p.deposit.enabled && p.deposit.amount > p.price && p.price > 0 ? "L'acompte ne peut pas dépasser le prix total." : '');
-  if (errs.length) { $('#' + errs[0]).focus(); return; }
-
+  if (errs.length) { $('#' + errs[0]).focus(); return false; }
+  return true;
+}
+function commitDraft(p) {
+  const fromReq = p._fromRequest; delete p._fromRequest;
+  const c = ensureClientIn(APP.state, p.client, true);
+  p.clientId = c.id;
   const list = APP.state.projects;
   const i = list.findIndex((x) => x.id === p.id);
   const before = i >= 0 ? list[i] : null;
@@ -2351,12 +2438,247 @@ function onFormSubmit(e) {
     const it = needles();
     if (it) moveStock(it, -(it.perProject || 1), `Projet de ${clientLabel(p)}`);
   }
+  // Les séances d'un même projet partagent la cliente et le titre.
+  for (const x of sessionsOf(p)) if (x.id !== p.id && (x.title !== p.title || x.clientId !== p.clientId || x.client.name !== p.client.name || x.client.instagram !== p.client.instagram)) {
+    x.title = p.title; x.client = { ...p.client }; x.clientId = p.clientId; x.updatedAt = Date.now();
+  }
+  if (fromReq) { const r = APP.state.requests.find((x) => x.id === fromReq); if (r) { r.status = 'acceptee'; r.projectId = p.id; r.updatedAt = Date.now(); } }
   save();
+  return i;
+}
+function onFormSubmit(e) {
+  e.preventDefault();
+  const p = readForm($('#pf'));
+  if (!validateDraft(p)) return;
+  const i = commitDraft(p);
   $('#sheet').close();
   render();
   const el = $(`#view [data-action="open-project"][data-id="${p.id}"]`);
   (el || $('#view')).focus();
   toast(i >= 0 ? 'Projet enregistré' : 'Projet ajouté à l’agenda');
+}
+
+/* =========================================================
+   Clientes : fiches clientes et demandes de projets en attente
+   ========================================================= */
+const REQ_STEPS = [['nouvelle', 'Nouvelles'], ['discussion', 'En discussion'], ['croquis', 'Croquis en cours']];
+const REQ_LABEL = { nouvelle: 'Nouvelle', discussion: 'En discussion', croquis: 'Croquis en cours', acceptee: 'Planifiée', refusee: 'Refusée' };
+const fold = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim().replace(/^@/, '');
+const initials = (n) => String(n || '?').trim().split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+
+function clientStats(c) {
+  const ps = projectsOfClient(c).sort(byDateTime);
+  const paid = ps.flatMap(paymentsOf).filter((x) => x.paidOn).reduce((t, x) => t + x.amount, 0);
+  const next = ps.filter((p) => p.status === 'prevu' && p.date >= today())[0];
+  const last = ps.filter((p) => p.date <= today() && p.status !== 'annule').pop();
+  const groups = new Map();
+  for (const p of ps) { const k = p.groupId || p.id; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(p); }
+  return { ps, paid, next, last, groups: [...groups.values()] };
+}
+
+function viewClientes() {
+  const tab = APP.clientTab || 'fiches';
+  const reqs = APP.state.requests;
+  const openReqs = reqs.filter((r) => REQ_STEPS.some(([k]) => k === r.status));
+  const head = `${pageHead('Fiches & demandes', 'Clientes')}
+    <div class="seg tab-seg" role="tablist" aria-label="Clientes">
+      <button type="button" role="tab" data-action="client-tab" data-view="fiches" aria-selected="${tab === 'fiches'}" aria-pressed="${tab === 'fiches'}">${icon('users')} Fiches clientes <span class="count">${APP.state.clients.length}</span></button>
+      <button type="button" role="tab" data-action="client-tab" data-view="demandes" aria-selected="${tab === 'demandes'}" aria-pressed="${tab === 'demandes'}">${icon('inbox')} Demandes en attente <span class="count">${openReqs.length}</span></button>
+    </div><!--/head-->`;
+  return tab === 'demandes' ? spread('clientes', head + requestsBody(openReqs), null) : clientsBody(head);
+}
+
+function clientsBody(head) {
+  const t = today();
+  const list = APP.state.clients.map((c) => ({ c, st: clientStats(c) }))
+    .sort((a, b) => (a.st.next ? 0 : 1) - (b.st.next ? 0 : 1) || (a.st.next && b.st.next ? byDateTime(a.st.next, b.st.next) : 0) || ((b.st.last && b.st.last.date) || '').localeCompare((a.st.last && a.st.last.date) || '') || a.c.name.localeCompare(b.c.name));
+  const sel = clientById(APP.clientSel) || (list[0] && list[0].c);
+  if (sel) APP.clientSel = sel.id;
+  const q = APP.clientQuery || '';
+  const left = `${head}
+    <section class="card" aria-labelledby="c-cl-list">
+      ${cardHead('users', 'Toutes les clientes', `<span class="count">${list.length}</span>`, 'c-cl-list')}
+      <div class="field"><label class="sr-only" for="cl-search">Rechercher une cliente</label>
+        <input class="input" id="cl-search" type="search" placeholder="Rechercher par prénom ou Instagram" value="${esc(q)}" autocomplete="off"></div>
+      ${list.length ? `<ul class="client-list">${list.map(({ c, st }) => `<li data-search="${esc(fold(c.name + ' ' + c.instagram))}" ${q && !fold(c.name + ' ' + c.instagram).includes(fold(q)) ? 'hidden' : ''}>
+        <button type="button" class="client-item ${sel && sel.id === c.id ? 'is-sel' : ''}" data-action="client-sel" data-id="${c.id}" aria-pressed="${!!(sel && sel.id === c.id)}">
+          <span class="client-avatar" aria-hidden="true">${esc(initials(c.name))}</span>
+          <span class="client-main"><strong>${esc(c.name || 'Sans prénom')}</strong><span>${c.instagram ? '@' + esc(c.instagram) + ' · ' : ''}${plural(st.groups.length, 'projet', 'projets')}</span></span>
+          <span class="client-when">${st.next ? `<span class="pill gold">${fmtShort(st.next.date)}</span>` : st.last ? `<span class="faint small">${fmtShort(st.last.date)}</span>` : ''}</span>
+        </button></li>`).join('')}</ul>
+        <p class="empty" id="cl-none" ${q && !list.some(({ c }) => fold(c.name + ' ' + c.instagram).includes(fold(q))) ? '' : 'hidden'}>Aucune cliente ne correspond.</p>` : `<p class="empty">Les fiches se créent toutes seules à chaque projet ou demande. Tu peux aussi en ajouter une ci-dessous.</p>`}
+      <details class="fold"><summary>+ Ajouter une cliente</summary><div>
+        <form class="inline-form" id="cl-new">
+          <div class="field"><label for="cln-name">Prénom</label><input class="input" id="cln-name" autocomplete="off"></div>
+          <div class="field"><label for="cln-insta">Instagram</label><div class="input-affix pre"><span class="affix">@</span><input class="input" id="cln-insta" autocomplete="off"></div></div>
+          <button class="btn" type="submit">${icon('plus')} Ajouter</button>
+        </form></div></details>
+    </section>`;
+  if (!sel) return spread('clientes', left, `<section class="card"><p class="empty">Aucune fiche cliente pour l'instant.</p></section>`);
+  const st = clientStats(sel);
+  const right = `
+    <section class="card client-card" id="client-detail" aria-labelledby="c-cl-name" tabindex="-1">
+      <div class="client-id">
+        <span class="client-avatar lg" aria-hidden="true">${esc(initials(sel.name))}</span>
+        <div><h2 class="card-title" id="c-cl-name">${esc(sel.name || 'Sans prénom')}</h2>
+        ${sel.instagram ? `<a class="small" href="https://instagram.com/${encodeURIComponent(sel.instagram)}" target="_blank" rel="noopener">@${esc(sel.instagram)} ↗</a>` : '<span class="small faint">Pas d’Instagram renseigné</span>'}</div>
+      </div>
+      <div class="client-tiles">
+        <div class="ctile"><span>Projets</span><strong>${st.groups.length}</strong></div>
+        <div class="ctile"><span>Total réglé</span><strong>${money(st.paid)}</strong></div>
+        <div class="ctile"><span>Prochain RDV</span><strong>${st.next ? fmtShort(st.next.date) : '—'}</strong></div>
+      </div>
+      <div class="btn-row">
+        <button type="button" class="btn primary" data-action="client-new-project" data-id="${sel.id}">${icon('plus')} Nouveau projet</button>
+        <button type="button" class="btn" data-action="client-new-request" data-id="${sel.id}">${icon('inbox')} Nouvelle demande</button>
+      </div>
+      <div class="field"><label for="cf-notes">Notes sur elle <span class="hint">(peau, allergies, préférences, retouches…)</span></label>
+        <textarea class="textarea" id="cf-notes" data-client-field="notes" data-id="${sel.id}" placeholder="Ex. : peau sensible, préfère le fine line, retouche offerte">${esc(sel.notes || '')}</textarea></div>
+      <details class="fold"><summary>Modifier ses coordonnées</summary><div class="grid-3">
+        <div class="field"><label for="cf-name">Prénom</label><input class="input" id="cf-name" data-client-field="name" data-id="${sel.id}" value="${esc(sel.name)}"></div>
+        <div class="field"><label for="cf-insta">Instagram</label><div class="input-affix pre"><span class="affix">@</span><input class="input" id="cf-insta" data-client-field="instagram" data-id="${sel.id}" value="${esc(sel.instagram)}"></div></div>
+        <div class="field"><label for="cf-other">Autre réseau</label><input class="input" id="cf-other" data-client-field="other" data-id="${sel.id}" value="${esc(sel.other)}"></div>
+      </div>${st.ps.length ? '' : `<div class="btn-row"><button type="button" class="btn danger sm" data-action="client-del" data-id="${sel.id}">${icon('trash')} Supprimer cette fiche</button></div>`}</details>
+    </section>
+    <section class="card" aria-labelledby="c-cl-hist">
+      ${cardHead('feather', 'Ses projets', '', 'c-cl-hist')}
+      ${st.groups.length ? `<ul class="rows">${st.groups.slice().reverse().map((g) => {
+        const first = g[0], lastS = g[g.length - 1];
+        const total = g.reduce((t, x) => t + (x.status === 'annule' ? 0 : x.price), 0);
+        const paid = g.flatMap(paymentsOf).filter((x) => x.paidOn).reduce((t, x) => t + x.amount, 0);
+        const target = g.find((x) => x.status === 'prevu' && x.date >= today()) || lastS;
+        return row({ ic: g.length > 1 ? 'layers' : 'calendar', id: target.id,
+          title: (first.title || 'Projet sans titre') + (g.length > 1 ? ` · ${g.length} séances` : ''),
+          sub: `${g.length > 1 ? `Du ${fmtShort(first.date)} au ${fmtShort(lastS.date)}` : fmtLong(first.date)} · réglé ${money(paid)} sur ${money(total)}`,
+          amt: paid >= total && total > 0 ? '<span class="pill ok">Soldé</span>' : '' });
+      }).join('')}</ul>` : `<p class="empty">Pas encore de projet avec elle.</p>`}
+    </section>
+    ${APP.state.requests.filter((r) => r.clientId === sel.id).length ? `<section class="card" aria-labelledby="c-cl-req">
+      ${cardHead('inbox', 'Ses demandes', '', 'c-cl-req')}
+      <ul class="rows">${APP.state.requests.filter((r) => r.clientId === sel.id).map((r) => `<li class="row"><span class="ic">${icon('inbox')}</span><button class="row-main" type="button" data-action="client-tab" data-view="demandes"><span class="row-title">${esc(r.idea || 'Demande')}</span><span class="row-sub">${REQ_LABEL[r.status] || r.status} · reçue le ${fmtShort(r.createdAt.slice(0, 10))}</span></button><span></span><span></span></li>`).join('')}</ul>
+    </section>` : ''}`;
+  return spread('clientes', left, right);
+}
+
+function requestsBody(openReqs) {
+  const edit = APP.state.requests.find((r) => r.id === APP.reqEdit);
+  const archived = APP.state.requests.filter((r) => !REQ_STEPS.some(([k]) => k === r.status)).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const card = (r) => {
+    const age = diffDays(r.createdAt.slice(0, 10), today());
+    const meta = [r.placement, r.size, r.budget ? `budget ${r.budget}` : '', r.wanted ? `souhaité : ${r.wanted}` : ''].filter(Boolean).join(' · ');
+    return `<article class="req-card" aria-label="Demande de ${esc(r.name)}">
+      <header class="req-head"><span class="client-avatar" aria-hidden="true">${esc(initials(r.name))}</span>
+        <div class="req-who"><strong>${esc(r.name)}</strong><span class="small faint">${r.instagram ? '@' + esc(r.instagram) + ' · ' : ''}${age === 0 ? "reçue aujourd'hui" : age === 1 ? 'reçue hier' : `reçue il y a ${age} jours`}</span></div></header>
+      <p class="req-idea">${esc(r.idea)}</p>
+      ${meta ? `<p class="small muted">${esc(meta)}</p>` : ''}
+      ${r.notes ? `<p class="small">${esc(r.notes)}</p>` : ''}
+      <div class="field"><label class="label small" for="rs-${r.id}">Étape</label>
+        <select class="select" id="rs-${r.id}" data-req-status data-id="${r.id}">${REQ_STEPS.map(([k, l]) => `<option value="${k}" ${r.status === k ? 'selected' : ''}>${REQ_LABEL[k]}</option>`).join('')}</select></div>
+      <div class="btn-row">
+        <button type="button" class="btn primary sm" data-action="req-plan" data-id="${r.id}">${icon('calendar')} Planifier</button>
+        <button type="button" class="btn sm" data-action="req-edit" data-id="${r.id}">Modifier</button>
+        <button type="button" class="btn sm ghost" data-action="req-refuse" data-id="${r.id}">Refuser</button>
+      </div>
+    </article>`;
+  };
+  return `
+    <section class="card" aria-labelledby="c-req-form" id="req-form-card">
+      ${cardHead('inbox', edit ? `Modifier la demande de ${esc(edit.name)}` : 'Nouvelle demande', '', 'c-req-form')}
+      <details class="fold req-fold" ${edit || !APP.state.requests.length ? 'open' : ''}><summary>${edit ? 'Modifier' : 'Noter une demande reçue (DM, e-mail, en personne…)'}</summary><div>
+      <form id="req-form" novalidate><datalist id="dl-clients">${APP.state.clients.map((c) => `<option value="${esc(c.name)}">${c.instagram ? '@' + esc(c.instagram) : ''}</option>`).join('')}</datalist>
+        <div class="grid-3">
+          <div class="field"><label for="rq-name">Prénom <span class="hint">(obligatoire)</span></label><input class="input" id="rq-name" list="dl-clients" value="${esc(edit ? edit.name : APP.reqPrefill ? APP.reqPrefill.name : '')}" autocomplete="off"><p class="error" id="e-rq-name"></p></div>
+          <div class="field"><label for="rq-insta">Instagram</label><div class="input-affix pre"><span class="affix">@</span><input class="input" id="rq-insta" value="${esc(edit ? edit.instagram : APP.reqPrefill ? APP.reqPrefill.instagram : '')}" autocomplete="off"></div></div>
+          <div class="field"><label for="rq-when">Date souhaitée</label><input class="input" id="rq-when" value="${esc(edit ? edit.wanted : '')}" placeholder="Ex. : avant l’été, en mars"></div>
+        </div>
+        <div class="field"><label for="rq-idea">Son idée <span class="hint">(obligatoire)</span></label><input class="input" id="rq-idea" value="${esc(edit ? edit.idea : '')}" placeholder="Ex. : papillon de nuit avec des fougères"><p class="error" id="e-rq-idea"></p></div>
+        <div class="grid-3">
+          <div class="field"><label for="rq-place">Emplacement</label><input class="input" id="rq-place" value="${esc(edit ? edit.placement : '')}" placeholder="Avant-bras, cheville…"></div>
+          <div class="field"><label for="rq-size">Taille</label><input class="input" id="rq-size" value="${esc(edit ? edit.size : '')}" placeholder="Ex. : 10 cm"></div>
+          <div class="field"><label for="rq-budget">Budget</label><input class="input" id="rq-budget" value="${esc(edit ? edit.budget : '')}" placeholder="Ex. : 200 €"></div>
+        </div>
+        <div class="field"><label for="rq-notes">Notes</label><textarea class="textarea" id="rq-notes" placeholder="Références envoyées, questions, disponibilités…">${esc(edit ? edit.notes : '')}</textarea></div>
+        <div class="btn-row">
+          <button type="submit" class="btn primary">${icon('check')} ${edit ? 'Enregistrer les modifications' : 'Ajouter la demande'}</button>
+          ${edit ? `<button type="button" class="btn ghost" data-action="req-cancel-edit">Annuler</button>` : ''}
+        </div>
+      </form></div></details>
+    </section>
+    <div class="kanban">${REQ_STEPS.map(([k, l]) => {
+      const items = openReqs.filter((r) => r.status === k).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      return `<section class="card kan-col" aria-labelledby="kc-${k}">
+        ${cardHead(k === 'nouvelle' ? 'inbox' : k === 'discussion' ? 'feather' : 'pencil', l, `<span class="count">${items.length}</span>`, 'kc-' + k)}
+        ${items.length ? items.map(card).join('') : `<p class="empty small">${k === 'nouvelle' ? 'Aucune nouvelle demande.' : 'Rien à cette étape.'}</p>`}
+      </section>`;
+    }).join('')}</div>
+    ${archived.length ? `<section class="card"><details class="fold"><summary>Demandes traitées (${archived.length})</summary><div><ul class="rows">${archived.map((r) => `<li class="row"><span class="ic">${icon(r.status === 'acceptee' ? 'check' : 'close')}</span>
+      <${r.projectId && findP(r.projectId) ? `button class="row-main" type="button" data-action="open-project" data-id="${r.projectId}"` : 'div class="row-main"'}><span class="row-title">${esc(r.name)} · ${esc(r.idea)}</span><span class="row-sub">${REQ_LABEL[r.status]} · reçue le ${fmtShort(r.createdAt.slice(0, 10))}</span></${r.projectId && findP(r.projectId) ? 'button' : 'div'}>
+      <button type="button" class="btn sm ghost" data-action="req-reopen" data-id="${r.id}">Rouvrir</button>
+      <button type="button" class="round sm" data-action="req-del" data-id="${r.id}" aria-label="Supprimer la demande de ${esc(r.name)}">${icon('trash')}</button></li>`).join('')}</ul></div></details></section>` : ''}`;
+}
+
+function onRequestSubmit(e) {
+  e.preventDefault();
+  const v = (id) => ($('#' + id).value || '').trim();
+  const name = v('rq-name'), idea = v('rq-idea');
+  $('#e-rq-name').textContent = name ? '' : 'Indique au moins son prénom.';
+  $('#e-rq-idea').textContent = idea ? '' : 'Décris son idée en quelques mots.';
+  if (!name) { $('#rq-name').focus(); return; }
+  if (!idea) { $('#rq-idea').focus(); return; }
+  const c = ensureClientIn(APP.state, { name, instagram: v('rq-insta').replace(/^@+/, ''), other: '' }, true);
+  const data = { name, instagram: v('rq-insta').replace(/^@+/, ''), idea, placement: v('rq-place'), size: v('rq-size'), budget: v('rq-budget'), wanted: v('rq-when'), notes: $('#rq-notes').value.trim(), clientId: c.id, updatedAt: Date.now() };
+  const edit = APP.state.requests.find((r) => r.id === APP.reqEdit);
+  if (edit) Object.assign(edit, data);
+  else APP.state.requests.push({ id: uid(), status: 'nouvelle', createdAt: new Date().toISOString(), projectId: '', ...data });
+  APP.reqEdit = null; APP.reqPrefill = null;
+  save(); render();
+  toast(edit ? 'Demande mise à jour' : `Demande de ${name} ajoutée`);
+}
+
+function planRequest(r) {
+  const t = newProject({});
+  t.client = { name: r.name, instagram: r.instagram, other: '' };
+  t.clientId = r.clientId;
+  t.title = [r.idea, r.placement].filter(Boolean).join(', ');
+  t.notes = [r.size && `Taille : ${r.size}`, r.budget && `Budget annoncé : ${r.budget}`, r.wanted && `Souhaité : ${r.wanted}`, r.notes].filter(Boolean).join('\n');
+  t._fromRequest = r.id;
+  openProject(null, { template: t });
+}
+
+/* ---------- Livre des recettes (obligatoire en micro-entreprise) ---------- */
+function bookEntries(year) {
+  return allPayments().filter((x) => x.paidOn && x.paidOn.startsWith(year)).sort((a, b) => a.paidOn.localeCompare(b.paidOn));
+}
+const bookNature = (x) => `Prestation de tatouage · ${projLabel(x.p)} · ${x.kind === 'deposit' ? 'acompte' : 'paiement final'}`;
+function bookCard() {
+  const yr = APP.bookYear || today().slice(0, 4);
+  const entries = bookEntries(yr);
+  const total = entries.reduce((t, x) => t + x.amount, 0);
+  const months = [...Array(12)].map((_, i) => `${yr}-${pad(i + 1)}`).filter((m) => m <= monthKey(today()) || entries.some((x) => monthKey(x.paidOn) === m));
+  return `<section class="card book-card" aria-labelledby="c-book">
+    ${cardHead('book', 'Livre des recettes', `<div class="period"><button class="round sm" type="button" data-action="book-prev" aria-label="Année précédente">${icon('left')}</button><span class="period-label">${yr}</span><button class="round sm" type="button" data-action="book-next" aria-label="Année suivante">${icon('right')}</button></div>`, 'c-book')}
+    <p class="small muted">Obligatoire en micro-entreprise : chaque encaissement, avec sa date, la cliente, la nature de la prestation et le mode de paiement. Tout est rempli automatiquement depuis les fiches projet.</p>
+    <div class="table-wrap"><table class="book-table">
+      <thead><tr><th scope="col">Mois</th><th scope="col">Encaissements</th><th scope="col">Montant</th></tr></thead>
+      <tbody>${months.map((m) => { const es = entries.filter((x) => monthKey(x.paidOn) === m); return `<tr><th scope="row">${cap(fmt(m + '-01', { month: 'long' }))}</th><td>${es.length || '—'}</td><td>${es.length ? money(es.reduce((t, x) => t + x.amount, 0)) : '—'}</td></tr>`; }).join('')}</tbody>
+      <tfoot><tr><th scope="row">Total ${yr}</th><td>${entries.length}</td><td>${money(total)}</td></tr></tfoot>
+    </table></div>
+    <div class="btn-row"><button type="button" class="btn primary" data-action="book-export" ${entries.length ? '' : 'disabled'}>${icon('download')} Exporter le livre ${yr} (tableur)</button></div>
+    ${entries.length ? `<details class="fold"><summary>Voir le détail (${plural(entries.length, 'encaissement', 'encaissements')})</summary><div><div class="table-wrap"><table class="book-table detail">
+      <thead><tr><th scope="col">Date</th><th scope="col">Cliente</th><th scope="col">Nature</th><th scope="col">Mode</th><th scope="col">Montant</th></tr></thead>
+      <tbody>${entries.map((x) => `<tr><td>${fmt(x.paidOn, { day: '2-digit', month: '2-digit' })}</td><td>${esc(clientLabel(x.p))}</td><td>${esc(bookNature(x).replace('Prestation de tatouage · ', ''))}</td><td>${methodLabel(x.p.method)}</td><td>${money(x.amount)}</td></tr>`).join('')}</tbody>
+    </table></div></div></details>` : ''}
+  </section>`;
+}
+function exportBook() {
+  const yr = APP.bookYear || today().slice(0, 4);
+  const cell = (v) => `"${String(v).replace(/"/g, '""')}"`;
+  const amount = (n) => n.toFixed(2).replace('.', ',');
+  const lines = [['Date d’encaissement', 'Cliente', 'Nature de la prestation', 'Mode de règlement', 'Montant (€)', 'Référence'].map(cell).join(';')];
+  for (const x of bookEntries(yr)) lines.push([fmt(x.paidOn, { day: '2-digit', month: '2-digit', year: 'numeric' }), clientLabel(x.p), bookNature(x), methodLabel(x.p.method), amount(x.amount), (x.p.id + '-' + (x.kind === 'deposit' ? 'A' : 'S')).toUpperCase()].map(cell).join(';'));
+  lines.push(['', '', '', 'Total', amount(bookEntries(yr).reduce((t, x) => t + x.amount, 0)), ''].map(cell).join(';'));
+  download(`livre-des-recettes-${yr}.csv`, '﻿' + lines.join('\r\n'), 'text/csv;charset=utf-8');
+  toast(`Livre des recettes ${yr} téléchargé (ouvrable dans Excel, Numbers ou Google Sheets).`);
 }
 
 /* =========================================================
@@ -2422,7 +2744,8 @@ function viewComptes() {
         ${brow('Il te reste', '', money(v.net), frac(v.net), 'good', true)}
       </div>
       <p class="hint">${mode === 'sim' ? '« Prévu » compte aussi les paiements attendus ce mois-ci, comme s’ils étaient reçus. ' : ''}Les taux se changent dans <a href="#reglages">Réglages</a>.</p>
-    </section>`;
+    </section>
+    ${bookCard()}`;
 
   const right = `
     <section class="card" aria-labelledby="c-pending">
@@ -2653,9 +2976,9 @@ function onSettingChange(el) {
 }
 
 /* ---------- Sauvegarde / restauration ---------- */
-function download(name, text) {
+function download(name, text, type = 'application/json') {
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  a.href = URL.createObjectURL(new Blob([text], { type }));
   a.download = name;
   document.body.appendChild(a);
   a.click();
@@ -2757,6 +3080,57 @@ function toast(message, undo) {
 const ACTIONS = {
   'enter-demo': () => enterDemo(),
   'lock-tab': (el) => { APP.lockTab = el.dataset.view; renderLock(); },
+  'client-tab': (el) => { APP.clientTab = el.dataset.view; APP.reqEdit = null; if (APP.route !== 'clientes') location.hash = '#clientes'; else render(); },
+  'client-sel': (el) => { APP.clientSel = el.dataset.id; render(); if (isNarrow()) $('#client-detail')?.scrollIntoView({ block: 'start' }); },
+  'client-open': (el) => {
+    const f = $('#pf'); if (f) { readForm(f); if (JSON.stringify(draft) !== draftSnap) { toast('Enregistre ou annule d’abord tes modifications.'); return; } $('#sheet').close(); }
+    APP.clientTab = 'fiches'; APP.clientSel = el.dataset.id;
+    if (APP.route !== 'clientes') location.hash = '#clientes'; else render();
+  },
+  'client-new-project': (el) => { const c = clientById(el.dataset.id); const t = newProject({}); t.client = { name: c.name, instagram: c.instagram, other: c.other }; t.clientId = c.id; openProject(null, { template: t }); },
+  'client-new-request': (el) => { const c = clientById(el.dataset.id); APP.clientTab = 'demandes'; APP.reqEdit = null; APP.reqPrefill = { name: c.name, instagram: c.instagram }; render(); $('#rq-idea')?.focus(); },
+  'client-del': (el) => {
+    const i = APP.state.clients.findIndex((c) => c.id === el.dataset.id); if (i < 0) return;
+    const [c] = APP.state.clients.splice(i, 1); APP.state.tomb[c.id] = Date.now(); APP.clientSel = null; save(); render();
+    toast(`Fiche de ${c.name} supprimée`, () => { APP.state.clients.push({ ...c, updatedAt: Date.now() }); save(); render(); });
+  },
+  'req-plan': (el) => { const r = APP.state.requests.find((x) => x.id === el.dataset.id); if (r) planRequest(r); },
+  'req-edit': (el) => { APP.reqEdit = el.dataset.id; render(); $('#req-form-card')?.scrollIntoView({ block: 'start' }); $('#rq-idea')?.focus({ preventScroll: true }); },
+  'req-cancel-edit': () => { APP.reqEdit = null; render(); },
+  'req-refuse': (el) => {
+    const r = APP.state.requests.find((x) => x.id === el.dataset.id); if (!r) return;
+    const prev = r.status; r.status = 'refusee'; r.updatedAt = Date.now(); save(); render();
+    toast(`Demande de ${r.name} refusée`, () => { r.status = prev; r.updatedAt = Date.now(); save(); render(); });
+  },
+  'req-reopen': (el) => { const r = APP.state.requests.find((x) => x.id === el.dataset.id); if (r) { r.status = 'discussion'; r.updatedAt = Date.now(); save(); render(); } },
+  'req-del': (el) => {
+    const i = APP.state.requests.findIndex((x) => x.id === el.dataset.id); if (i < 0) return;
+    const [r] = APP.state.requests.splice(i, 1); APP.state.tomb[r.id] = Date.now(); save(); render();
+    toast('Demande supprimée', () => { APP.state.requests.push({ ...r, updatedAt: Date.now() }); save(); render(); });
+  },
+  'book-prev': () => { APP.bookYear = String(Number(APP.bookYear || today().slice(0, 4)) - 1); render(); },
+  'book-next': () => { APP.bookYear = String(Number(APP.bookYear || today().slice(0, 4)) + 1); render(); },
+  'book-export': () => exportBook(),
+  'add-session': () => {
+    const p = readForm($('#pf'));
+    if (!validateDraft(p)) return;
+    if (!p.groupId) p.groupId = p.id;
+    commitDraft(p);
+    const all = sessionsOf(p);
+    const last = all[all.length - 1];
+    let d = addDays(last.date, 28);
+    while (weekday(d) === 6 || isRestMarked(d)) d = addDays(d, 1);
+    const tpl = { ...clone(p), id: uid(), groupId: p.groupId, date: d, status: 'prevu', updatedAt: 0, createdAt: new Date().toISOString(),
+      deposit: { enabled: false, amount: 0, due: '', paidOn: '' }, final: { paidOn: '' }, sketch: { due: '', remindDays: null, remindDate: '', remindTime: '', sent: false } };
+    $('#sheet').close(); render();
+    openProject(null, { template: tpl });
+    toast(`Séance ${all.length + 1} : choisis sa date et son prix, puis enregistre.`);
+  },
+  'open-session': (el) => {
+    readForm($('#pf'));
+    if (JSON.stringify(draft) !== draftSnap) { toast('Enregistre d’abord tes modifications, puis ouvre l’autre séance.'); return; }
+    openProject(el.dataset.id);
+  },
   'profile-photo-remove': () => { S().profilePhoto = ''; APP.state.settingsAt = Date.now(); save(); refreshShell(); },
   'notif-on': async (el) => {
     el.disabled = true;
@@ -2923,6 +3297,20 @@ document.addEventListener('change', (e) => {
   if (el.matches('[data-show-pw]')) { $$('input[type="password"], input[data-was-pw]').forEach((i) => { i.type = el.checked ? 'text' : 'password'; i.toggleAttribute('data-was-pw', true); }); return; }
   if (el.id === 'profile-photo') { const f = el.files && el.files[0]; if (f) onProfilePhoto(f).catch(() => toast("Cette image n'a pas pu être lue. Essaie un fichier JPG ou PNG.")); return; }
   if (el.matches('[data-setting]')) { onSettingChange(el); return; }
+  if (el.matches('[data-client-field]')) {
+    const c = clientById(el.dataset.id); if (!c) return;
+    const k = el.dataset.clientField;
+    c[k] = k === 'instagram' ? el.value.trim().replace(/^@+/, '') : k === 'notes' ? el.value : el.value.trim();
+    c.updatedAt = Date.now();
+    if (k !== 'notes') for (const x of projectsOfClient(c)) { x.client = { name: c.name, instagram: c.instagram, other: c.other }; x.updatedAt = Date.now(); }
+    save(); if (k !== 'notes') render(); else toast('Notes enregistrées');
+    return;
+  }
+  if (el.matches('[data-req-status]')) {
+    const r = APP.state.requests.find((x) => x.id === el.dataset.id); if (!r) return;
+    r.status = el.value; r.updatedAt = Date.now(); save(); render();
+    return;
+  }
   if (el.matches('[data-item]')) {
     const it = APP.state.inventory.items.find((x) => x.id === el.dataset.item);
     if (!it) return;
@@ -2931,6 +3319,15 @@ document.addEventListener('change', (e) => {
     it.updatedAt = Date.now();
     save(); render();
   }
+});
+document.addEventListener('input', (e) => {
+  const el = e.target;
+  if (el.id !== 'cl-search') return;
+  const q = fold(el.value);
+  APP.clientQuery = el.value;
+  let shown = 0;
+  for (const li of $$('.client-list > li')) { const ok = !q || li.dataset.search.includes(q); li.hidden = !ok; if (ok) shown++; }
+  const none = $('#cl-none'); if (none) none.hidden = shown > 0;
 });
 document.addEventListener('submit', (e) => {
   const f = e.target;
@@ -2943,6 +3340,18 @@ document.addEventListener('submit', (e) => {
     moveStock(it, dir * n, f.elements.note.value.trim() || (dir > 0 ? 'Livraison' : 'Retrait'));
     save(); render();
     toast(`${dir > 0 ? '+' : '−'}${n} ${it.unit || it.name}`);
+    return;
+  }
+  if (f.id === 'req-form') return onRequestSubmit(e);
+  if (f.id === 'cl-new') {
+    e.preventDefault();
+    const name = $('#cln-name').value.trim(), instagram = $('#cln-insta').value.trim().replace(/^@+/, '');
+    if (!name && !instagram) { $('#cln-name').focus(); return; }
+    const c = ensureClientIn(APP.state, { name: name || instagram, instagram, other: '' }, true);
+    APP.clientSel = c.id; APP.clientQuery = '';
+    save(); render();
+    $('#client-detail')?.focus();
+    toast(`Fiche de ${c.name} créée`);
     return;
   }
   if (f.id === 'import-form') return onImport(e);
