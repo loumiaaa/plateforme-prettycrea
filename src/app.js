@@ -525,7 +525,7 @@ function reminders() {
     }
   }
   const nouv = APP.state.requests.filter((r) => r.status === 'nouvelle');
-  if (nouv.length) out.push({ rank: 0.5, level: 'soon', icon: 'inbox', action: 'client-tab', view: 'demandes', title: nouv.length > 1 ? `${nouv.length} nouvelles demandes de projet` : `Nouvelle demande de ${nouv[0].name}`, sub: 'À lire dans Clientes' });
+  if (nouv.length) out.push({ rank: 0.5, level: 'soon', icon: 'inbox', action: 'client-tab', view: 'demandes', title: nouv.length > 1 ? `${nouv.length} nouvelles demandes de projet` : `Nouvelle demande de ${nouv[0].name}`, sub: 'À lire dans Clients' });
   const ws = startOfWeek(t);
   for (const w of [ws, addDays(ws, 7)]) {
     const info = restInfo(w);
@@ -1655,7 +1655,7 @@ function armAutoLock() {
 const NAV = [
   { id: 'bibliotheque', label: 'Accueil', icon: 'library' },
   { id: 'agenda', label: 'Agenda', icon: 'calendar' },
-  { id: 'clientes', label: 'Clientes', icon: 'users' },
+  { id: 'clients', label: 'Clients', icon: 'users' },
   { id: 'comptes', label: 'Comptes', icon: 'ledger' },
   { id: 'reserves', label: 'Réserves', icon: 'jar' },
   { id: 'reglages', label: 'Réglages', icon: 'sliders' },
@@ -1687,7 +1687,7 @@ function renderShell() {
 
 function route() {
   if (!APP.state) return;
-  const h = (location.hash || '#bibliotheque').slice(1);
+  const h = (location.hash || '#bibliotheque').slice(1).replace(/^clientes$/, 'clients');
   APP.route = NAV.some((n) => n.id === h) ? h : 'bibliotheque';
   $$('.tabs a').forEach((a) => { if (a.dataset.nav === APP.route) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   render(true);
@@ -1699,8 +1699,8 @@ window.addEventListener('hashchange', () => {
   $('#view')?.focus({ preventScroll: true });
 });
 
-const VIEWS = { bibliotheque: viewLibrary, agenda: viewAgenda, clientes: viewClientes, comptes: viewComptes, reserves: viewReserves, reglages: viewReglages };
-const TITLES = { bibliotheque: 'Accueil', agenda: 'Agenda', clientes: 'Clientes', comptes: 'Comptes', reserves: 'Réserves', reglages: 'Réglages' };
+const VIEWS = { bibliotheque: viewLibrary, agenda: viewAgenda, clients: viewClientes, comptes: viewComptes, reserves: viewReserves, reglages: viewReglages };
+const TITLES = { bibliotheque: 'Accueil', agenda: 'Agenda', clients: 'Clients', comptes: 'Comptes', reserves: 'Réserves', reglages: 'Réglages' };
 
 function render(fresh = false) {
   const v = $('#view');
@@ -1738,7 +1738,7 @@ const initial = (t) => `<span class="initial" aria-hidden="true">${t.charAt(0)}<
 const SPACES = {
   bibliotheque: { no: 'I', tag: 'Bienvenue à l’atelier', art: 'bouquet' },
   agenda: { no: 'II', tag: 'Le temps des rendez-vous', art: 'moons' },
-  clientes: { no: 'III', tag: 'Celles qui te confient leur peau', art: 'candle' },
+  clients: { no: 'III', tag: 'Ceux qui te confient leur peau', art: 'candle' },
   comptes: { no: 'IV', tag: 'Ce qui entre, ce qui reste', art: 'quill' },
   reserves: { no: 'V', tag: 'Le cabinet des aiguilles', art: 'jar' },
   reglages: { no: 'VI', tag: 'L’atelier à ta façon', art: 'compass' },
@@ -2100,7 +2100,7 @@ function openProject(id, preset) {
             <input class="input" id="f-other" name="other" value="${esc(p.client.other)}" placeholder="TikTok, Facebook…" autocomplete="off">
           </div>
         </div>
-        ${p.clientId && clientById(p.clientId) ? `<p class="small"><button type="button" class="linkish" data-action="client-open" data-id="${p.clientId}">${icon('users')} Voir sa fiche cliente</button></p>` : ''}
+        ${p.clientId && clientById(p.clientId) ? `<p class="small"><button type="button" class="linkish" data-action="client-open" data-id="${p.clientId}">${icon('users')} Voir la fiche client</button></p>` : ''}
         <div class="field">
           <label for="f-title">Nom du projet</label>
           <input class="input" id="f-title" name="title" value="${esc(p.title)}" placeholder="Ex. : Papillon de nuit, avant-bras">
@@ -2480,12 +2480,12 @@ function viewClientes() {
   const tab = APP.clientTab || 'fiches';
   const reqs = APP.state.requests;
   const openReqs = reqs.filter((r) => REQ_STEPS.some(([k]) => k === r.status));
-  const head = `${pageHead('Fiches & demandes', 'Clientes')}
-    <div class="seg tab-seg" role="tablist" aria-label="Clientes">
-      <button type="button" role="tab" data-action="client-tab" data-view="fiches" aria-selected="${tab === 'fiches'}" aria-pressed="${tab === 'fiches'}">${icon('users')} Fiches clientes <span class="count">${APP.state.clients.length}</span></button>
+  const head = `${pageHead('Fiches & demandes', 'Clients')}
+    <div class="seg tab-seg" role="tablist" aria-label="Clients">
+      <button type="button" role="tab" data-action="client-tab" data-view="fiches" aria-selected="${tab === 'fiches'}" aria-pressed="${tab === 'fiches'}">${icon('users')} Fiches clients <span class="count">${APP.state.clients.length}</span></button>
       <button type="button" role="tab" data-action="client-tab" data-view="demandes" aria-selected="${tab === 'demandes'}" aria-pressed="${tab === 'demandes'}">${icon('inbox')} Demandes en attente <span class="count">${openReqs.length}</span></button>
     </div><!--/head-->`;
-  return tab === 'demandes' ? spread('clientes', head + requestsBody(openReqs), null) : clientsBody(head);
+  return tab === 'demandes' ? spread('clients', head + requestsBody(openReqs), null) : clientsBody(head);
 }
 
 function clientsBody(head) {
@@ -2497,8 +2497,8 @@ function clientsBody(head) {
   const q = APP.clientQuery || '';
   const left = `${head}
     <section class="card" aria-labelledby="c-cl-list">
-      ${cardHead('users', 'Toutes les clientes', `<span class="count">${list.length}</span>`, 'c-cl-list')}
-      <div class="field"><label class="sr-only" for="cl-search">Rechercher une cliente</label>
+      ${cardHead('users', 'Tous les clients', `<span class="count">${list.length}</span>`, 'c-cl-list')}
+      <div class="field"><label class="sr-only" for="cl-search">Rechercher un client</label>
         <input class="input" id="cl-search" type="search" placeholder="Rechercher par prénom ou Instagram" value="${esc(q)}" autocomplete="off"></div>
       ${list.length ? `<ul class="client-list">${list.map(({ c, st }) => `<li data-search="${esc(fold(c.name + ' ' + c.instagram))}" ${q && !fold(c.name + ' ' + c.instagram).includes(fold(q)) ? 'hidden' : ''}>
         <button type="button" class="client-item ${sel && sel.id === c.id ? 'is-sel' : ''}" data-action="client-sel" data-id="${c.id}" aria-pressed="${!!(sel && sel.id === c.id)}">
@@ -2506,15 +2506,15 @@ function clientsBody(head) {
           <span class="client-main"><strong>${esc(c.name || 'Sans prénom')}</strong><span>${c.instagram ? '@' + esc(c.instagram) + ' · ' : ''}${plural(st.groups.length, 'projet', 'projets')}</span></span>
           <span class="client-when">${st.next ? `<span class="pill gold">${fmtShort(st.next.date)}</span>` : st.last ? `<span class="faint small">${fmtShort(st.last.date)}</span>` : ''}</span>
         </button></li>`).join('')}</ul>
-        <p class="empty" id="cl-none" ${q && !list.some(({ c }) => fold(c.name + ' ' + c.instagram).includes(fold(q))) ? '' : 'hidden'}>Aucune cliente ne correspond.</p>` : `<p class="empty">Les fiches se créent toutes seules à chaque projet ou demande. Tu peux aussi en ajouter une ci-dessous.</p>`}
-      <details class="fold"><summary>+ Ajouter une cliente</summary><div>
+        <p class="empty" id="cl-none" ${q && !list.some(({ c }) => fold(c.name + ' ' + c.instagram).includes(fold(q))) ? '' : 'hidden'}>Aucun client ne correspond.</p>` : `<p class="empty">Les fiches se créent toutes seules à chaque projet ou demande. Tu peux aussi en ajouter une ci-dessous.</p>`}
+      <details class="fold"><summary>+ Ajouter un client</summary><div>
         <form class="inline-form" id="cl-new">
           <div class="field"><label for="cln-name">Prénom</label><input class="input" id="cln-name" autocomplete="off"></div>
           <div class="field"><label for="cln-insta">Instagram</label><div class="input-affix pre"><span class="affix">@</span><input class="input" id="cln-insta" autocomplete="off"></div></div>
           <button class="btn" type="submit">${icon('plus')} Ajouter</button>
         </form></div></details>
     </section>`;
-  if (!sel) return spread('clientes', left, `<section class="card"><p class="empty">Aucune fiche cliente pour l'instant.</p></section>`);
+  if (!sel) return spread('clients', left, `<section class="card"><p class="empty">Aucune fiche client pour l'instant.</p></section>`);
   const st = clientStats(sel);
   const right = `
     <section class="card client-card" id="client-detail" aria-labelledby="c-cl-name" tabindex="-1">
@@ -2532,7 +2532,7 @@ function clientsBody(head) {
         <button type="button" class="btn primary" data-action="client-new-project" data-id="${sel.id}">${icon('plus')} Nouveau projet</button>
         <button type="button" class="btn" data-action="client-new-request" data-id="${sel.id}">${icon('inbox')} Nouvelle demande</button>
       </div>
-      <div class="field"><label for="cf-notes">Notes sur elle <span class="hint">(peau, allergies, préférences, retouches…)</span></label>
+      <div class="field"><label for="cf-notes">Notes <span class="hint">(peau, allergies, préférences, retouches…)</span></label>
         <textarea class="textarea" id="cf-notes" data-client-field="notes" data-id="${sel.id}" placeholder="Ex. : peau sensible, préfère le fine line, retouche offerte">${esc(sel.notes || '')}</textarea></div>
       <details class="fold"><summary>Modifier ses coordonnées</summary><div class="grid-3">
         <div class="field"><label for="cf-name">Prénom</label><input class="input" id="cf-name" data-client-field="name" data-id="${sel.id}" value="${esc(sel.name)}"></div>
@@ -2551,13 +2551,13 @@ function clientsBody(head) {
           title: (first.title || 'Projet sans titre') + (g.length > 1 ? ` · ${g.length} séances` : ''),
           sub: `${g.length > 1 ? `Du ${fmtShort(first.date)} au ${fmtShort(lastS.date)}` : fmtLong(first.date)} · réglé ${money(paid)} sur ${money(total)}`,
           amt: paid >= total && total > 0 ? '<span class="pill ok">Soldé</span>' : '' });
-      }).join('')}</ul>` : `<p class="empty">Pas encore de projet avec elle.</p>`}
+      }).join('')}</ul>` : `<p class="empty">Pas encore de projet.</p>`}
     </section>
     ${APP.state.requests.filter((r) => r.clientId === sel.id).length ? `<section class="card" aria-labelledby="c-cl-req">
       ${cardHead('inbox', 'Ses demandes', '', 'c-cl-req')}
       <ul class="rows">${APP.state.requests.filter((r) => r.clientId === sel.id).map((r) => `<li class="row"><span class="ic">${icon('inbox')}</span><button class="row-main" type="button" data-action="client-tab" data-view="demandes"><span class="row-title">${esc(r.idea || 'Demande')}</span><span class="row-sub">${REQ_LABEL[r.status] || r.status} · reçue le ${fmtShort(r.createdAt.slice(0, 10))}</span></button><span></span><span></span></li>`).join('')}</ul>
     </section>` : ''}`;
-  return spread('clientes', left, right);
+  return spread('clients', left, right);
 }
 
 function requestsBody(openReqs) {
@@ -3080,12 +3080,12 @@ function toast(message, undo) {
 const ACTIONS = {
   'enter-demo': () => enterDemo(),
   'lock-tab': (el) => { APP.lockTab = el.dataset.view; renderLock(); },
-  'client-tab': (el) => { APP.clientTab = el.dataset.view; APP.reqEdit = null; if (APP.route !== 'clientes') location.hash = '#clientes'; else render(); },
+  'client-tab': (el) => { APP.clientTab = el.dataset.view; APP.reqEdit = null; if (APP.route !== 'clients') location.hash = '#clients'; else render(); },
   'client-sel': (el) => { APP.clientSel = el.dataset.id; render(); if (isNarrow()) $('#client-detail')?.scrollIntoView({ block: 'start' }); },
   'client-open': (el) => {
     const f = $('#pf'); if (f) { readForm(f); if (JSON.stringify(draft) !== draftSnap) { toast('Enregistre ou annule d’abord tes modifications.'); return; } $('#sheet').close(); }
     APP.clientTab = 'fiches'; APP.clientSel = el.dataset.id;
-    if (APP.route !== 'clientes') location.hash = '#clientes'; else render();
+    if (APP.route !== 'clients') location.hash = '#clients'; else render();
   },
   'client-new-project': (el) => { const c = clientById(el.dataset.id); const t = newProject({}); t.client = { name: c.name, instagram: c.instagram, other: c.other }; t.clientId = c.id; openProject(null, { template: t }); },
   'client-new-request': (el) => { const c = clientById(el.dataset.id); APP.clientTab = 'demandes'; APP.reqEdit = null; APP.reqPrefill = { name: c.name, instagram: c.instagram }; render(); $('#rq-idea')?.focus(); },
