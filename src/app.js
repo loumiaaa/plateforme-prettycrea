@@ -556,10 +556,12 @@ async function persist() {
     } else if (APP.mode === 'private' && APP.key && SYNC.email) {
       await persistLocal();
       setSaveStatus('saved');
+      snapshot().catch((e) => console.error(e));
       if (SYNC.on) { setSync(navigator.onLine ? 'pending' : 'offline'); scheduleSync(); }
       return;
     } else if (APP.mode === 'private' && APP.key) {
       await kv.set('vault', await seal(APP.key, APP.salt, APP.iter, APP.state));
+      snapshot().catch((e) => console.error(e));
     }
     setSaveStatus('saved');
   } catch (e) {
@@ -933,6 +935,8 @@ function touchAll(s) {
   const now = Date.now();
   s.projects.forEach((p) => { p.updatedAt = now; });
   s.inventory.items.forEach((i) => { i.updatedAt = now; });
+  (s.clients || []).forEach((c) => { c.updatedAt = now; });
+  (s.requests || []).forEach((r) => { r.updatedAt = now; });
   s.settingsAt = now;
   return s;
 }
@@ -1426,6 +1430,98 @@ async function flushPhotoQueue() {
     if (error) left.push(id);
   }
   await kv.set('photoQueue', left);
+}
+
+/* =========================================================
+   Sauvegardes automatiques
+   ---------------------------------------------------------
+   À chaque modification, une copie chiffrée de tout l'espace est gardée :
+   - sur l'appareil : les 30 dernières versions ;
+   - sur le serveur (dossier privé, chiffré) : les 40 dernières versions,
+     puis une par jour pendant 60 jours, quel que soit l'appareil.
+   Les modifications faites à moins de 2 minutes d'intervalle forment une seule version.
+   ========================================================= */
+const SNAP_GAP = 2 * 60 * 1000;
+const snapDir = () => `${SYNC.uid}/sauvegardes`;
+const snapName = (e) => `v-${e.start}${e.label ? '-avant' : ''}.json`;
+async function snapshot(label = '') {
+  if (APP.mode !== 'private' || !APP.key) return;
+  const at = Date.now();
+  const sealed = await seal(APP.key, APP.salt, APP.iter, APP.state);
+  const entry = { at, iv: sealed.iv, data: sealed.data, n: APP.state.projects.length, label };
+  const ring = (await kv.get('snaps')) || [];
+  const fresh = !label && ring[0] && !ring[0].closed && !ring[0].label && at - ring[0].start < SNAP_GAP;
+  entry.start = fresh ? ring[0].start : at;
+  if (fresh) ring[0] = entry; else ring.unshift(entry);
+  await kv.set('snaps', ring.slice(0, 30));
+  if (SYNC.on && SYNC.uid && navigator.onLine) uploadSnap(entry).catch((e) => console.error(e));
+}
+async function uploadSnap(entry) {
+  const sb = await sbClient();
+  const body = new Blob([JSON.stringify({ app: 'prettycrea-version', at: entry.at, n: entry.n, label: entry.label, iv: entry.iv, data: entry.data })], { type: 'application/json' });
+  await withTimeout(sb.storage.from(BUCKET).upload(`${snapDir()}/${snapName(entry)}`, body, { upsert: true }));
+  if (Date.now() - (lsGet('prettycrea.snapPrune') || 0) > 10 * 60 * 1000) { lsSet('prettycrea.snapPrune', Date.now()); pruneSnaps().catch((e) => console.error(e)); }
+}
+async function remoteSnaps() {
+  const sb = await sbClient();
+  const { data, error } = await withTimeout(sb.storage.from(BUCKET).list(snapDir(), { limit: 1000 }));
+  if (error) throw error;
+  return (data || []).map((f) => { const m = /^v-(\d+)(-avant)?\.json$/.exec(f.name); return m && { start: Number(m[1]), label: m[2] ? 'Avant la restauration' : '', name: f.name }; }).filter(Boolean).sort((a, b) => b.start - a.start);
+}
+async function pruneSnaps() {
+  const all = await remoteSnaps();
+  const keep = new Set(all.slice(0, 40).map((x) => x.name));
+  const days = new Set();
+  for (const x of all) {
+    const d = new Date(x.start).toDateString();
+    if (!days.has(d) && Date.now() - x.start < 60 * 864e5) { days.add(d); keep.add(x.name); }
+  }
+  const drop = all.filter((x) => !keep.has(x.name)).map((x) => `${snapDir()}/${x.name}`);
+  if (drop.length) await withTimeout((await sbClient()).storage.from(BUCKET).remove(drop));
+}
+async function listSnaps() {
+  const ring = (await kv.get('snaps')) || [];
+  const out = ring.map((x) => ({ at: x.at, start: x.start, n: x.n, label: x.label, src: 'local', ref: x.at }));
+  let err = '';
+  if (SYNC.on && SYNC.uid) {
+    try {
+      for (const r of await remoteSnaps()) if (!out.some((x) => x.start === r.start)) out.push({ at: r.start, start: r.start, label: r.label, src: 'serveur', ref: r.name });
+    } catch (e) { console.error(e); err = navigator.onLine ? 'Les versions du serveur n’ont pas pu être lues.' : 'Hors ligne : seules les versions de cet appareil sont affichées.'; }
+  }
+  return { list: out.sort((a, b) => b.at - a.at), err };
+}
+async function loadSnap(src, ref) {
+  let blob;
+  if (src === 'local') blob = ((await kv.get('snaps')) || []).find((x) => x.at === Number(ref));
+  else {
+    const sb = await sbClient();
+    const { data, error } = await withTimeout(sb.storage.from(BUCKET).download(`${snapDir()}/${ref}`));
+    if (error) throw error;
+    blob = JSON.parse(await data.text());
+  }
+  if (!blob) throw new Error('introuvable');
+  return normalize(await unseal(APP.key, blob));
+}
+/* Remplace tout l'espace par un autre état : ce qui n'y figure pas est effacé, y compris sur les autres appareils. */
+function replaceState(state) {
+  const now = Date.now();
+  const all = (s) => [...s.projects, ...s.inventory.items, ...(s.clients || []), ...(s.requests || [])];
+  const keep = new Set(all(state).map((x) => x.id));
+  all(APP.state).forEach((x) => { if (!keep.has(x.id)) state.tomb[x.id] = now; });
+  for (const id of keep) delete state.tomb[id];
+  APP.state = touchAll(state);
+}
+async function renderSnaps() {
+  const box = $('#snap-list');
+  if (!box) return;
+  box.innerHTML = '<p class="small muted">Chargement…</p>';
+  const { list, err } = await listSnaps();
+  const fmtAt = (t) => new Date(t).toLocaleString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  box.innerHTML = list.length ? `<ul class="rows">${list.slice(0, 40).map((x, i) => `<li class="row"><span class="ic">${icon('clock')}</span>
+    <div class="row-main"><span class="row-title">${cap(fmtAt(x.at))}</span><span class="row-sub">${i === 0 ? '<strong>Version actuelle</strong> · ' : ''}${x.label ? esc(x.label) + ' · ' : ''}${x.src === 'local' ? 'Sur cet appareil' : 'Sur le serveur'}${x.n != null ? ` · ${plural(x.n, 'projet', 'projets')}` : ''}</span></div>
+    <button type="button" class="btn sm" data-action="snap-restore" data-src="${x.src}" data-ref="${esc(String(x.ref))}" data-at="${x.at}">Restaurer</button><span></span></li>`).join('')}</ul>`
+    : '<p class="empty small">Aucune sauvegarde pour l’instant : la première sera faite à ta prochaine modification.</p>';
+  if (err) box.insertAdjacentHTML('afterbegin', `<p class="small">${icon('alert')} ${err}</p>`);
 }
 
 window.addEventListener('online', () => { if (SYNC.on) syncNow(); });
@@ -2959,6 +3055,9 @@ function viewReglages() {
       </div></details>
       <div class="btn-row"><button type="button" class="btn sm danger" data-action="forget-device">${icon('door')} Déconnecter cet appareil</button></div>`
       : `<p class="small muted">Tes données sont chiffrées et rangées uniquement dans ce navigateur. Fais une sauvegarde chaque début de mois : elle permet de tout retrouver ou de passer sur un autre appareil.</p>`}
+      ${priv ? `<details class="fold" id="snap-fold"><summary>Sauvegardes automatiques</summary><div>
+        <p class="small muted">Une copie chiffrée est faite à chaque modification. Si une erreur arrive (projet effacé, mauvaise manipulation), choisis une version pour revenir en arrière. La version actuelle est gardée avant de restaurer.</p>
+        <div id="snap-list"></div></div></details>` : ''}
       <div class="btn-row"><button type="button" class="btn primary" data-action="export">${icon('download')} Télécharger une sauvegarde</button></div>
       <details class="fold"><summary>Restaurer une sauvegarde</summary><div>
         <form class="inline-form" id="import-form">
@@ -3036,10 +3135,7 @@ async function onImport(e) {
     }
     APP.pendingImport = null;
     // La sauvegarde remplace tout : ce qui n'y figure pas est effacé, y compris sur les autres appareils.
-    const now = Date.now();
-    const keep = new Set([...state.projects, ...state.inventory.items].map((x) => x.id));
-    [...APP.state.projects, ...APP.state.inventory.items].forEach((x) => { if (!keep.has(x.id)) state.tomb[x.id] = now; });
-    APP.state = touchAll(state);
+    replaceState(state);
     applyDisplay();
     save();
     toast('Sauvegarde restaurée');
@@ -3103,6 +3199,28 @@ function toast(message, undo) {
    Actions (délégation d'événements)
    ========================================================= */
 const ACTIONS = {
+  'snap-restore': async (el) => {
+    if (el.dataset.armed !== '1') {
+      $$('[data-action="snap-restore"][data-armed="1"]').forEach((b) => { b.dataset.armed = ''; b.textContent = 'Restaurer'; });
+      el.dataset.armed = '1'; el.textContent = 'Confirmer : tout remplacer';
+      return;
+    }
+    el.disabled = true; el.textContent = 'Restauration…';
+    try {
+      const state = await loadSnap(el.dataset.src, el.dataset.ref);
+      // Filet de sécurité : la version actuelle devient elle-même une sauvegarde.
+      const close = async () => { const ring = (await kv.get('snaps')) || []; if (ring[0]) { ring[0].closed = true; await kv.set('snaps', ring); } };
+      await close(); await snapshot('Avant la restauration'); await close();
+      replaceState(state);
+      applyDisplay();
+      save(); render();
+      toast(`Version du ${new Date(Number(el.dataset.at)).toLocaleString('fr-FR', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })} restaurée.`);
+    } catch (e) {
+      console.error(e);
+      el.disabled = false; el.dataset.armed = ''; el.textContent = 'Restaurer';
+      toast('Impossible de lire cette sauvegarde. Vérifie ta connexion et réessaie.');
+    }
+  },
   'sync-now': async () => { if (!SYNC.on) { toast('La synchronisation n’est pas active sur cet appareil.'); return; } for (let i = 0; SYNC.busy && i < 50; i++) await new Promise((r) => setTimeout(r, 1000)); await syncNow(); toast(SYNC.status === 'ok' ? 'Synchronisé : cet appareil est à jour.' : SYNC.status === 'offline' ? 'Pas de connexion internet pour le moment.' : 'La synchronisation a échoué : le détail est affiché dans Réglages.'); },
   'enter-demo': () => enterDemo(),
   'lock-tab': (el) => { APP.lockTab = el.dataset.view; renderLock(); },
@@ -3346,6 +3464,7 @@ document.addEventListener('change', (e) => {
     save(); render();
   }
 });
+document.addEventListener('toggle', (e) => { if (e.target.id === 'snap-fold' && e.target.open) renderSnaps(); }, true);
 document.addEventListener('input', (e) => {
   const el = e.target;
   if (el.id !== 'cl-search') return;
