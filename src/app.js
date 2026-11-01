@@ -772,17 +772,35 @@ function setSync(status) {
   if (label) el.innerHTML = label;
 }
 
+// Une requête qui ne répond jamais (réseau mobile qui change, appli mise en arrière-plan)
+// ne doit pas bloquer la synchro jusqu'au prochain redémarrage.
+const withTimeout = (pr, ms = 20000) => Promise.race([pr, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
 async function syncNow() {
-  if (!SYNC.on || APP.mode !== 'private' || !APP.key || SYNC.busy) return;
+  if (!SYNC.on || APP.mode !== 'private' || !APP.key) return;
+  if (SYNC.busy) { if (Date.now() - SYNC.busySince < 60000) return; SYNC.busy = false; }
   if (!navigator.onLine) { setSync('offline'); return; }
-  SYNC.busy = true;
+  SYNC.busy = true; SYNC.busySince = Date.now();
   setSync('syncing');
   try {
-    const sb = await sbClient();
+    await withTimeout(syncRound(), 45000);
+  } catch (e) {
+    console.error(e);
+    SYNC.lastErr = (e && (e.message || e.code)) || String(e);
+    const auth = e && (e.status === 401 || /jwt|token/i.test(e.message || ''));
+    setSync(!navigator.onLine ? 'offline' : auth ? 'key' : 'error');
+    if (auth && SYNC.secret) connectSync(true);
+  } finally {
+    SYNC.busy = false;
+    renderSyncInfo();
+  }
+}
+async function syncRound() {
+  {
+    const sb = await withTimeout(sbClient());
     let merged = false;
     for (let attempt = 0; attempt < 4; attempt++) {
       const startRev = SYNC.rev;
-      const { data: row, error } = await sb.from(TABLE).select('version, iv, donnees, sel, iterations, cle, sel_secours, cle_secours').eq('user_id', SYNC.uid).maybeSingle();
+      const { data: row, error } = await withTimeout(sb.from(TABLE).select('version, iv, donnees, sel, iterations, cle, sel_secours, cle_secours').eq('user_id', SYNC.uid).maybeSingle());
       if (error) throw error;
       if (row) {
         // Mot de passe changé sur un autre appareil : la clé des données ne change pas, seule son enveloppe.
@@ -798,12 +816,12 @@ async function syncNow() {
       if (row && SYNC.rev === SYNC.synced) break;
       const blob = await seal(APP.key, APP.salt, APP.iter, APP.state);
       if (!row) {
-        const { error: e2 } = await sb.from(TABLE).insert({ user_id: SYNC.uid, sel: blob.salt, iterations: blob.iter, cle: SYNC.cle, ...(SYNC.secours || {}), iv: blob.iv, donnees: blob.data, version: 1 });
+        const { error: e2 } = await withTimeout(sb.from(TABLE).insert({ user_id: SYNC.uid, sel: blob.salt, iterations: blob.iter, cle: SYNC.cle, ...(SYNC.secours || {}), iv: blob.iv, donnees: blob.data, version: 1 }));
         if (e2) { if (e2.code === '23505') continue; throw e2; }
         SYNC.base = 1;
       } else {
         const next = row.version + 1;
-        const { data: upd, error: e3 } = await sb.from(TABLE).update({ iv: blob.iv, donnees: blob.data, version: next }).eq('user_id', SYNC.uid).eq('version', row.version).select('version');
+        const { data: upd, error: e3 } = await withTimeout(sb.from(TABLE).update({ iv: blob.iv, donnees: blob.data, version: next }).eq('user_id', SYNC.uid).eq('version', row.version).select('version'));
         if (e3) throw e3;
         if (!upd || !upd.length) continue; // un autre appareil vient d'écrire : on refusionne
         SYNC.base = next;
@@ -812,19 +830,20 @@ async function syncNow() {
       if (SYNC.rev === startRev) break;
     }
     await persistLocal();
+    SYNC.lastOk = Date.now(); SYNC.lastErr = '';
     setSync(SYNC.rev === SYNC.synced ? 'ok' : 'pending');
     if (merged) softRender();
     flushPhotoQueue();
     pushPlan().catch(() => {});
-  } catch (e) {
-    console.error(e);
-    const auth = e && (e.status === 401 || /jwt|token/i.test(e.message || ''));
-    setSync(!navigator.onLine ? 'offline' : auth ? 'key' : 'error');
-    if (auth && SYNC.secret) connectSync(true);
-  } finally {
-    SYNC.busy = false;
   }
 }
+/* Bloc « Synchronisation » des réglages : état réel, dernière synchro réussie, erreur éventuelle. */
+function syncInfoHTML() {
+  const st = { syncing: 'Synchronisation en cours…', ok: 'À jour', pending: 'Modifications en attente d’envoi', offline: 'Hors ligne : tout est gardé sur l’appareil', error: 'La dernière tentative a échoué', key: 'Reconnexion nécessaire : verrouille puis rouvre avec ton mot de passe' }[SYNC.status] || 'En attente';
+  const when = SYNC.lastOk ? new Date(SYNC.lastOk).toLocaleString('fr-FR', { weekday: 'long', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'pas encore depuis l’ouverture';
+  return `<p class="small"><strong>État :</strong> ${st}<br><strong>Dernière synchro réussie :</strong> ${when}${SYNC.lastErr ? `<br><strong>Détail de l’erreur :</strong> <code>${esc(SYNC.lastErr)}</code>` : ''}</p>`;
+}
+function renderSyncInfo() { const el = $('#sync-info'); if (el) el.innerHTML = syncInfoHTML(); }
 function softRender() {
   const a = document.activeElement;
   if ($('#sheet').open || (a && /INPUT|SELECT|TEXTAREA/.test(a.tagName))) { APP.pendingRender = true; return; }
@@ -847,7 +866,9 @@ async function connectSync(force = false) {
   } catch (e) {
     console.error(e);
     SYNC.on = true;
+    SYNC.lastErr = 'connexion : ' + ((e && (e.message || e.code)) || String(e));
     setSync(navigator.onLine ? 'key' : 'offline');
+    renderSyncInfo();
   }
 }
 
@@ -1409,7 +1430,9 @@ async function flushPhotoQueue() {
 
 window.addEventListener('online', () => { if (SYNC.on) syncNow(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && SYNC.on) syncNow(); });
-setInterval(() => { if (SYNC.on && !document.hidden) syncNow(); }, 45000);
+window.addEventListener('focus', () => { if (SYNC.on) syncNow(); });
+window.addEventListener('pageshow', () => { if (SYNC.on) syncNow(); });
+setInterval(() => { if (SYNC.on && !document.hidden) syncNow(); }, 20000);
 
 /* =========================================================
    Démarrage, écran d'entrée, verrouillage
@@ -1682,7 +1705,7 @@ function renderShell() {
   </header>
   ${demo ? `<div class="demo-banner"><div class="wrap">${icon('eye')}<span><strong>Mode démo.</strong><span class="demo-more"> Données fictives, sans lien avec l'espace privé de Lucile.</span></span><button class="linkish" type="button" data-action="reset-demo">Remettre la démo à zéro</button></div></div>` : ''}
   <main id="view" class="wrap" tabindex="-1"></main>`;
-  setSaveStatus('saved');
+  if (SYNC.on && APP.mode === 'private') setSync(SYNC.status); else setSaveStatus('saved');
 }
 
 function route() {
@@ -2927,6 +2950,8 @@ function viewReglages() {
         <select class="select" id="set-autoLock" data-setting="autoLock">${[[5, '5 minutes'], [15, '15 minutes'], [30, '30 minutes'], [60, '1 heure'], [0, 'Jamais']].map(([v, l]) => `<option value="${v}" ${Number(s.autoLock) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
       ${SYNC.email ? `
       <div class="restline"><span class="ic">${icon('check')}</span><span>Synchronisation active pour <strong>${esc(SYNC.email)}</strong>. Tes données sont chiffrées sur l'appareil avant d'être envoyées.</span></div>
+      <div id="sync-info" aria-live="polite">${syncInfoHTML()}</div>
+      <div class="btn-row"><button type="button" class="btn sm primary" data-action="sync-now">${icon('check')} Synchroniser maintenant</button></div>
       <p class="small muted">Pour ajouter un appareil : ouvre la plateforme dessus et connecte-toi avec la même adresse et le même mot de passe. Une sauvegarde de temps en temps reste une bonne idée.</p>
       <details class="fold"><summary>Clé de secours</summary><div>
         <p class="small">${SYNC.secours ? 'Ta clé de secours permet de choisir un nouveau mot de passe si tu oublies le tien. Si tu l’as perdue, crée-en une nouvelle : l’ancienne cessera de fonctionner.' : '<strong>Tu n’as pas encore de clé de secours.</strong> Crée-la maintenant : sans elle, un mot de passe oublié ferait perdre tes données.'}</p>
@@ -3078,6 +3103,7 @@ function toast(message, undo) {
    Actions (délégation d'événements)
    ========================================================= */
 const ACTIONS = {
+  'sync-now': async () => { if (!SYNC.on) { toast('La synchronisation n’est pas active sur cet appareil.'); return; } for (let i = 0; SYNC.busy && i < 50; i++) await new Promise((r) => setTimeout(r, 1000)); await syncNow(); toast(SYNC.status === 'ok' ? 'Synchronisé : cet appareil est à jour.' : SYNC.status === 'offline' ? 'Pas de connexion internet pour le moment.' : 'La synchronisation a échoué : le détail est affiché dans Réglages.'); },
   'enter-demo': () => enterDemo(),
   'lock-tab': (el) => { APP.lockTab = el.dataset.view; renderLock(); },
   'client-tab': (el) => { APP.clientTab = el.dataset.view; APP.reqEdit = null; if (APP.route !== 'clients') location.hash = '#clients'; else render(); },
