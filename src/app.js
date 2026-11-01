@@ -880,7 +880,7 @@ async function openRemote(sb, user, email, pw, secret) {
   const member = await sb.rpc('prettycrea_est_membre');
   if (member.error) throw member.error;
   if (!member.data) {
-    await sb.auth.signOut();
+    await sb.auth.signOut({ scope: 'local' });
     APP.lockTab = 'login';
     await renderLock();
     $('#acc-email').value = email;
@@ -1047,7 +1047,7 @@ async function changePasswordSynced(cur, n1) {
 }
 
 async function forgetDevice() {
-  try { const sb = await sbClient(); if (sb) await sb.auth.signOut(); } catch {}
+  try { const sb = await sbClient(); if (sb) await sb.auth.signOut({ scope: 'local' }); } catch {}
   await kv.del('vault');
   await kv.del('photoQueue');
   Object.assign(SYNC, { on: false, uid: null, email: null, secret: null, cle: null, secours: null, base: 0, rev: 0, synced: 0 });
