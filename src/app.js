@@ -796,21 +796,82 @@ async function syncNow() {
     renderSyncInfo();
   }
 }
+const missingColumn = (e) => e && (e.code === '42703' || e.code === 'PGRST204' || /column/i.test(e.message || ''));
+/* Lit le coffre du serveur. Fonctionne aussi si les colonnes de la clé de secours
+   n'ont pas encore été ajoutées dans Supabase (script SQL exécuté en partie). */
+async function fetchVault(sb) {
+  const base = 'version, iv, donnees, sel, iterations, cle';
+  if (!SYNC.noSecoursCols) {
+    const { data, error } = await withTimeout(sb.from(TABLE).select(base + ', sel_secours, cle_secours').eq('user_id', SYNC.uid).maybeSingle());
+    if (!error) return data;
+    if (!missingColumn(error)) throw error;
+    SYNC.noSecoursCols = true;
+  }
+  const { data, error } = await withTimeout(sb.from(TABLE).select(base).eq('user_id', SYNC.uid).maybeSingle());
+  if (error) throw error;
+  return data;
+}
+/* Clé des données du coffre du serveur. D'habitude c'est la même que celle de l'appareil
+   (seule l'enveloppe change avec le mot de passe). Mais si chaque appareil a créé son propre
+   coffre pendant que la synchro était bloquée, on ouvre celui du serveur avec le mot de passe. */
+async function vaultKey(row) {
+  if (row.cle === SYNC.cle) return APP.key;
+  if (SYNC.pw) {
+    try { return await unwrapKey(row.cle, await deriveKey(SYNC.pw, unb64(row.sel), row.iterations)); } catch {}
+  }
+  return APP.key;
+}
+async function sameKey(a, b) {
+  if (a === b) return true;
+  try { return b64(await crypto.subtle.exportKey('raw', a)) === b64(await crypto.subtle.exportKey('raw', b)); } catch { return false; }
+}
+/* Rechiffre avec la nouvelle clé les photos gardées sur l'appareil, et les met en file d'envoi. */
+async function rekeyPhotos(oldKey, newKey) {
+  const ids = new Set((await kv.get('photoQueue')) || []);
+  for (const p of APP.state.projects) if (p.photo) ids.add(p.photo);
+  if (S().profilePhoto) ids.add(S().profilePhoto);
+  const queue = new Set((await kv.get('photoQueue')) || []);
+  for (const id of ids) {
+    const bytes = await kv.get('photo:' + id);
+    if (!bytes) continue;
+    let pt;
+    try { pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: bytes.slice(0, 12) }, oldKey, bytes.slice(12)); } catch { continue; }
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, newKey, pt));
+    const out = new Uint8Array(12 + ct.length); out.set(iv); out.set(ct, 12);
+    await kv.set('photo:' + id, out);
+    queue.add(id);
+  }
+  await kv.set('photoQueue', [...queue]);
+}
+/* Empreinte du contenu (éléments et dates de modification), indépendante de l'ordre. */
+function fingerprint(s) {
+  const ids = (l) => (l || []).map((x) => x.id + ':' + (x.updatedAt || 0)).sort();
+  return JSON.stringify([ids(s.projects), ids(s.clients), ids(s.requests), ids(s.inventory.items),
+    (s.inventory.log || []).map((l) => l.id).sort(), Object.entries(s.tomb || {}).map(([k, v]) => k + ':' + v).sort(),
+    Object.entries(s.rest || {}).map(([d, r]) => d + ':' + (r.at || 0)).sort(), s.settingsAt || 0]);
+}
 async function syncRound() {
   {
     const sb = await withTimeout(sbClient());
     let merged = false;
     for (let attempt = 0; attempt < 4; attempt++) {
       const startRev = SYNC.rev;
-      const { data: row, error } = await withTimeout(sb.from(TABLE).select('version, iv, donnees, sel, iterations, cle, sel_secours, cle_secours').eq('user_id', SYNC.uid).maybeSingle());
-      if (error) throw error;
+      const row = await fetchVault(sb);
       if (row) {
-        // Mot de passe changé sur un autre appareil : la clé des données ne change pas, seule son enveloppe.
-        if (row.sel !== b64(APP.salt) || row.cle !== SYNC.cle) { APP.salt = unb64(row.sel); APP.iter = row.iterations; SYNC.cle = row.cle; }
         if (row.cle_secours) SYNC.secours = { sel_secours: row.sel_secours, cle_secours: row.cle_secours };
-        if (row.version !== SYNC.base) {
-          const remote = normalize(await unseal(APP.key, { iv: row.iv, data: row.donnees }));
+        if (row.version !== SYNC.base || row.cle !== SYNC.cle) {
+          const key = await vaultKey(row);
+          const remote = normalize(await unseal(key, { iv: row.iv, data: row.donnees }));
+          if (!(await sameKey(key, APP.key))) {
+            await rekeyPhotos(APP.key, key);
+            // La clé de secours de cet appareil ouvrait son ancien coffre : elle ne vaut plus rien.
+            SYNC.secours = row.cle_secours ? { sel_secours: row.sel_secours, cle_secours: row.cle_secours } : null;
+          }
+          APP.key = key; APP.salt = unb64(row.sel); APP.iter = row.iterations; SYNC.cle = row.cle;
           APP.state = normalize(mergeStates(APP.state, remote));
+          // Cet appareil avait des choses que le serveur n'a pas : il faut les envoyer.
+          if (fingerprint(APP.state) !== fingerprint(remote)) SYNC.rev++;
           SYNC.base = row.version;
           merged = true;
         }
@@ -818,12 +879,16 @@ async function syncRound() {
       if (row && SYNC.rev === SYNC.synced) break;
       const blob = await seal(APP.key, APP.salt, APP.iter, APP.state);
       if (!row) {
-        const { error: e2 } = await withTimeout(sb.from(TABLE).insert({ user_id: SYNC.uid, sel: blob.salt, iterations: blob.iter, cle: SYNC.cle, ...(SYNC.secours || {}), iv: blob.iv, donnees: blob.data, version: 1 }));
+        const ins = { user_id: SYNC.uid, sel: blob.salt, iterations: blob.iter, cle: SYNC.cle, iv: blob.iv, donnees: blob.data, version: 1 };
+        let { error: e2 } = await withTimeout(sb.from(TABLE).insert({ ...ins, ...(SYNC.noSecoursCols ? {} : SYNC.secours || {}) }));
+        if (e2 && missingColumn(e2)) { SYNC.noSecoursCols = true; ({ error: e2 } = await withTimeout(sb.from(TABLE).insert(ins))); }
         if (e2) { if (e2.code === '23505') continue; throw e2; }
         SYNC.base = 1;
       } else {
         const next = row.version + 1;
-        const { data: upd, error: e3 } = await withTimeout(sb.from(TABLE).update({ iv: blob.iv, donnees: blob.data, version: next }).eq('user_id', SYNC.uid).eq('version', row.version).select('version'));
+        // La clé de secours n'a pas pu être enregistrée tant que les colonnes manquaient : on la rattrape.
+        const addSecours = SYNC.secours && !row.cle_secours && !SYNC.noSecoursCols ? SYNC.secours : {};
+        const { data: upd, error: e3 } = await withTimeout(sb.from(TABLE).update({ iv: blob.iv, donnees: blob.data, version: next, ...addSecours }).eq('user_id', SYNC.uid).eq('version', row.version).select('version'));
         if (e3) throw e3;
         if (!upd || !upd.length) continue; // un autre appareil vient d'écrire : on refusionne
         SYNC.base = next;
@@ -889,6 +954,7 @@ async function openRemote(sb, user, email, pw, secret) {
   }
   const { data: row, error } = await sb.from(TABLE).select('*').eq('user_id', user.id).maybeSingle();
   if (error) throw error;
+  SYNC.pw = pw; SYNC.noSecoursCols = !!row && !('cle_secours' in row);
   if (row) {
     const kek = await deriveKey(pw, unb64(row.sel), row.iterations);
     APP.key = await unwrapKey(row.cle, kek);
@@ -896,6 +962,19 @@ async function openRemote(sb, user, email, pw, secret) {
     APP.state = normalize(await unseal(APP.key, { iv: row.iv, data: row.donnees }));
     SYNC.cle = row.cle; SYNC.base = row.version; SYNC.rev = SYNC.synced = 0;
     SYNC.secours = row.cle_secours ? { sel_secours: row.sel_secours, cle_secours: row.cle_secours } : null;
+    // Ce qui était resté sur cet appareil (non envoyé, ou dans un coffre local à part) est fusionné, pas perdu.
+    try {
+      const cache = await kv.get('vault');
+      if (cache && cache.data && cache.cle && (!cache.email || normEmail(cache.email) === normEmail(email))) {
+        const oldKey = await unwrapKey(cache.cle, await deriveKey(pw, unb64(cache.salt), cache.iter || PBKDF2_ITER));
+        const local = normalize(await unseal(oldKey, cache));
+        if (!(await sameKey(oldKey, APP.key))) await rekeyPhotos(oldKey, APP.key);
+        else if (!SYNC.secours && cache.secours) SYNC.secours = cache.secours;
+        const remote = APP.state;
+        APP.state = normalize(mergeStates(remote, local));
+        if (fingerprint(APP.state) !== fingerprint(remote)) SYNC.rev = 1;
+      }
+    } catch (e) { console.error(e); }
   } else {
     APP.salt = crypto.getRandomValues(new Uint8Array(16));
     APP.iter = PBKDF2_ITER;
@@ -915,12 +994,12 @@ async function openRemote(sb, user, email, pw, secret) {
     } catch {}
     SYNC.base = 0; SYNC.rev = 1; SYNC.synced = 0;
   }
-  SYNC.email = normEmail(email); SYNC.uid = user.id; SYNC.secret = secret; SYNC.on = true;
+  SYNC.email = normEmail(email); SYNC.uid = user.id; SYNC.secret = secret; SYNC.on = true; SYNC.pw = pw;
   if (!SYNC.secours) {
     // Nouveau coffre (ou coffre sans clé de secours) : on en crée une et on la montre avant d'entrer.
     const code = newRecoveryCode();
     SYNC.secours = await recoveryWrap(APP.key, code);
-    if (row) await sb.from(TABLE).update(SYNC.secours).eq('user_id', user.id);
+    if (row && !SYNC.noSecoursCols) await sb.from(TABLE).update(SYNC.secours).eq('user_id', user.id);
     await persistLocal();
     renderRecoveryKey(code, () => { enterApp('private'); syncNow(); });
     return true;
@@ -1012,7 +1091,7 @@ async function onUnlockSynced(e) {
     APP.key = await unwrapKey(cache.cle, kek);
     APP.salt = unb64(cache.salt); APP.iter = cache.iter || PBKDF2_ITER;
     APP.state = normalize(await unseal(APP.key, cache));
-    Object.assign(SYNC, { email: cache.email, uid: cache.uid, cle: cache.cle, secours: cache.secours || null, base: cache.base || 0, rev: cache.dirty ? 1 : 0, synced: 0, secret: await authSecret(cache.email, pw) });
+    Object.assign(SYNC, { email: cache.email, uid: cache.uid, cle: cache.cle, secours: cache.secours || null, base: cache.base || 0, rev: cache.dirty ? 1 : 0, synced: 0, secret: await authSecret(cache.email, pw), pw, noSecoursCols: false });
     enterApp('private');
     connectSync();
   } catch {
@@ -1042,7 +1121,7 @@ async function changePasswordSynced(cur, n1) {
   const cle = await wrapKey(APP.key, await deriveKey(n1, salt, PBKDF2_ITER));
   const { error: e2 } = await sb.from(TABLE).update({ sel: b64(salt), iterations: PBKDF2_ITER, cle }).eq('user_id', SYNC.uid);
   if (e2) throw e2;
-  APP.salt = salt; APP.iter = PBKDF2_ITER; SYNC.cle = cle; SYNC.secret = newSecret;
+  APP.salt = salt; APP.iter = PBKDF2_ITER; SYNC.cle = cle; SYNC.secret = newSecret; SYNC.pw = n1;
   await persistLocal();
 }
 
@@ -1050,7 +1129,7 @@ async function forgetDevice() {
   try { const sb = await sbClient(); if (sb) await sb.auth.signOut({ scope: 'local' }); } catch {}
   await kv.del('vault');
   await kv.del('photoQueue');
-  Object.assign(SYNC, { on: false, uid: null, email: null, secret: null, cle: null, secours: null, base: 0, rev: 0, synced: 0 });
+  Object.assign(SYNC, { on: false, uid: null, email: null, secret: null, pw: null, cle: null, secours: null, base: 0, rev: 0, synced: 0 });
 }
 
 /* ---------- Clé de secours : rouvrir le coffre après un mot de passe oublié ---------- */
@@ -1223,7 +1302,7 @@ async function onRecover(e, user) {
     if (e2) throw e2;
     APP.key = dek; APP.salt = salt; APP.iter = PBKDF2_ITER;
     APP.state = normalize(await unseal(dek, { iv: row.iv, data: row.donnees }));
-    Object.assign(SYNC, { email, uid: user.id, secret, cle, secours: { sel_secours: row.sel_secours, cle_secours: row.cle_secours }, base: row.version, rev: 0, synced: 0, on: true });
+    Object.assign(SYNC, { email, uid: user.id, secret, cle, secours: { sel_secours: row.sel_secours, cle_secours: row.cle_secours }, base: row.version, rev: 0, synced: 0, on: true, pw });
     enterApp('private');
     await persistLocal();
     syncNow();
@@ -1755,7 +1834,7 @@ function lock() {
   const sheet = $('#sheet');
   if (sheet.open) sheet.close();
   APP.key = null; APP.state = null; APP.mode = null;
-  SYNC.on = false; SYNC.secret = null; clearTimeout(SYNC.timer);
+  SYNC.on = false; SYNC.secret = null; SYNC.pw = null; clearTimeout(SYNC.timer);
   Object.keys(PHOTO_URLS).forEach((k) => { URL.revokeObjectURL(PHOTO_URLS[k]); delete PHOTO_URLS[k]; });
   renderLock();
 }
