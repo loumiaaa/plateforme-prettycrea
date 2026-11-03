@@ -1278,3 +1278,7 @@ body { background-attachment: scroll; }
 .book-card .card-head { flex-wrap: wrap; row-gap: 8px; }
 @media (max-width: 640px) { .book-card .btn-row .btn { width: 100%; white-space: normal; text-align: center; } }
 @media (min-width: 901px) { .top-actions .round.mobile-only { display: none !important; } }
+
+/* Rester connectée */
+.remember-hint { margin: -6px 0 0 calc(1.3em + 10px); font-size: 0.86rem; }
+input.toggle { width: 1.5em; height: 1.5em; accent-color: var(--accent); flex: none; cursor: pointer; }

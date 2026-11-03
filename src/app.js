@@ -752,6 +752,7 @@ function mergeStates(a, b) {
 async function persistLocal() {
   const blob = await seal(APP.key, APP.salt, APP.iter, APP.state);
   await kv.set('vault', { ...blob, v: 2, email: SYNC.email, uid: SYNC.uid, cle: SYNC.cle, secours: SYNC.secours, base: SYNC.base, dirty: SYNC.rev !== SYNC.synced });
+  if (APP.remember) await saveRemember();
 }
 function scheduleSync(delay = 1200) {
   if (!SYNC.on) return;
@@ -1264,14 +1265,16 @@ function renderRecoveryForm(user) {
             <input class="input" id="rc-pw2" type="password" autocomplete="new-password">
           </div>
           <label class="check"><input type="checkbox" id="pw-show" data-show-pw> Afficher le mot de passe</label>
-          <p class="error" id="unlock-error" role="alert"></p>
+          <label class="check"><input type="checkbox" id="remember" checked> Rester connectée sur cet appareil</label>
+            <p class="hint muted remember-hint">L’appli s’ouvrira sans mot de passe. À décocher sur un appareil partagé.</p>
+            <p class="error" id="unlock-error" role="alert"></p>
           <button class="btn primary" type="submit">${icon('lock')} Enregistrer et ouvrir mon espace</button>
         </form>
         <p class="small muted">Sans la clé de secours, les données chiffrées ne peuvent pas être rouvertes, même avec un nouveau mot de passe.</p>
       </section>
     </article></div></div>
   </main>`;
-  $('#recover-form').addEventListener('submit', (e) => onRecover(e, user));
+  $('#recover-form').addEventListener('submit', (e) => { APP.remember = !!$('#remember', e.target)?.checked; return onRecover(e, user); });
   $('#rc-code').focus();
 }
 async function onRecover(e, user) {
@@ -1624,7 +1627,56 @@ async function boot() {
   try { mode = sessionStorage.getItem('prettycrea.mode'); } catch {}
   if (SYNC_ON() && /type=recovery|error_code=|access_token=/.test(location.hash)) return handleRecoveryLanding();
   if (mode === 'demo') return enterDemo();
+  if (SYNC_ON() && (await openRemembered())) return;
   renderLock();
+}
+
+/* =========================================================
+   Rester connectée
+   ---------------------------------------------------------
+   La clé des données est gardée sur l'appareil, chiffrée par une clé
+   « non exportable » créée par le navigateur et rangée dans IndexedDB :
+   le code de la page peut s'en servir, mais personne ne peut la copier
+   ailleurs. Le serveur n'en sait rien. « Verrouiller » efface ce souvenir
+   et le mot de passe est redemandé à la prochaine ouverture.
+   ========================================================= */
+async function saveRemember() {
+  if (!APP.remember || APP.mode !== 'private' || !APP.key || !SYNC.email) return;
+  try {
+    const r = await kv.get('remember');
+    const dk = r && r.dk ? r.dk : await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const payload = enc.encode(JSON.stringify({ k: b64(await crypto.subtle.exportKey('raw', APP.key)), s: SYNC.secret, e: SYNC.email }));
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, dk, payload);
+    await kv.set('remember', { dk, iv: b64(iv), ct: b64(ct) });
+  } catch (e) { console.error(e); }
+}
+async function forgetRemember() {
+  APP.remember = false;
+  try { await kv.del('remember'); } catch {}
+}
+async function openRemembered() {
+  let r = null, cache = null;
+  try { r = await kv.get('remember'); cache = await kv.get('vault'); } catch {}
+  if (!r || !r.dk || !cache || !cache.email || !cache.data) return false;
+  try {
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(r.iv) }, r.dk, unb64(r.ct));
+    const { k, s, e } = JSON.parse(dec.decode(pt));
+    if (normEmail(e) !== normEmail(cache.email)) throw new Error('compte');
+    APP.key = await crypto.subtle.importKey('raw', unb64(k), { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
+    APP.salt = unb64(cache.salt); APP.iter = cache.iter || PBKDF2_ITER;
+    APP.state = normalize(await unseal(APP.key, cache));
+    Object.assign(SYNC, { email: cache.email, uid: cache.uid, cle: cache.cle, secours: cache.secours || null, base: cache.base || 0, rev: cache.dirty ? 1 : 0, synced: 0, secret: s, pw: null, noSecoursCols: false });
+    APP.remember = true;
+    enterApp('private');
+    connectSync();
+    return true;
+  } catch (e) {
+    console.error(e);
+    APP.key = null; APP.state = null;
+    await forgetRemember();
+    return false;
+  }
 }
 
 async function renderLock(message = '') {
@@ -1675,6 +1727,8 @@ async function renderLock(message = '') {
               <input class="input" id="pw" name="pw" type="password" autocomplete="current-password" required>
             </div>
             <label class="check"><input type="checkbox" id="pw-show" data-show-pw> Afficher le mot de passe</label>
+            <label class="check"><input type="checkbox" id="remember" checked> Rester connectée sur cet appareil</label>
+            <p class="hint muted remember-hint">L’appli s’ouvrira sans mot de passe. À décocher sur un appareil partagé.</p>
             <p class="error" id="unlock-error" role="alert">${esc(message)}</p>
             <button class="btn primary" type="submit">${icon('door')} Ouvrir mon espace</button>
             <button class="linkish" type="button" data-action="lock-tab" data-view="forgot">Mot de passe oublié ?</button>
@@ -1706,6 +1760,8 @@ async function renderLock(message = '') {
             </div>` : ''}
             <label class="check"><input type="checkbox" id="pw-show" data-show-pw> Afficher le mot de passe</label>
             ${tab === 'signup' ? `<p class="hint muted">Ce mot de passe chiffre tes données : il ne peut pas être récupéré. Note-le dans un endroit sûr.</p>` : ''}
+            <label class="check"><input type="checkbox" id="remember" checked> Rester connectée sur cet appareil</label>
+            <p class="hint muted remember-hint">L’appli s’ouvrira sans mot de passe. À décocher sur un appareil partagé.</p>
             <p class="error" id="unlock-error" role="alert">${esc(message)}</p>
             <button class="btn primary" type="submit">${icon(tab === 'login' ? 'door' : 'lock')} ${tab === 'login' ? 'Me connecter' : 'Créer mon compte'}</button>
             ${tab === 'login' ? `<button class="linkish" type="button" data-action="lock-tab" data-view="forgot">Mot de passe oublié ?</button>` : ''}
@@ -1760,7 +1816,7 @@ async function renderLock(message = '') {
   const f = $('#acc-forgot') || $('#unlock-form') || $('#create-form') || $('#acc-login') || $('#acc-signup');
   if (f) {
     const handler = { 'acc-forgot': onForgot, 'unlock-form': syncedCache ? onUnlockSynced : onUnlock, 'create-form': onCreate, 'acc-login': onLogin, 'acc-signup': onSignup }[f.id];
-    f.addEventListener('submit', handler);
+    f.addEventListener('submit', (e) => { APP.remember = !!$('#remember', f)?.checked; return handler(e); });
     $('input', f).focus();
   }
 }
@@ -1822,6 +1878,7 @@ function enterApp(mode) {
   window.scrollTo(0, 0);
   armAutoLock();
   if (mode === 'demo') persist();
+  if (mode === 'private') { if (APP.remember) saveRemember(); else kv.del('remember').catch(() => {}); }
 }
 
 function lock() {
@@ -1841,7 +1898,7 @@ function lock() {
 
 function armAutoLock() {
   clearTimeout(APP.lockTimer);
-  if (APP.mode !== 'private') return;
+  if (APP.mode !== 'private' || APP.remember) return;
   const min = Number(S().autoLock) || 0;
   if (min > 0) APP.lockTimer = setTimeout(() => { if (APP.mode === 'private') lock(); }, min * 60000);
 }
@@ -3121,7 +3178,9 @@ function viewReglages() {
     <section class="card" aria-labelledby="s-sec">
       ${cardHead('lock', priv ? 'Sécurité & sauvegardes' : 'Démo', '', 's-sec')}
       ${priv ? `
-      <div class="set-row"><label class="label" for="set-autoLock">Verrouiller après<span class="hint">sans activité</span></label>
+      ${SYNC.email ? `<div class="set-row"><label class="label" for="set-remember">Rester connectée sur cet appareil<span class="hint">${APP.remember ? 'L’appli s’ouvre sans mot de passe. Le bouton « Verrouiller » le redemande.' : 'Le mot de passe est demandé à chaque ouverture.'}</span></label>
+        <input type="checkbox" class="toggle" id="set-remember" ${APP.remember ? 'checked' : ''}></div>` : ''}
+      <div class="set-row"><label class="label" for="set-autoLock">Verrouiller après<span class="hint">${APP.remember ? 'inactif tant que tu restes connectée' : 'sans activité'}</span></label>
         <select class="select" id="set-autoLock" data-setting="autoLock">${[[5, '5 minutes'], [15, '15 minutes'], [30, '30 minutes'], [60, '1 heure'], [0, 'Jamais']].map(([v, l]) => `<option value="${v}" ${Number(s.autoLock) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
       ${SYNC.email ? `
       <div class="restline"><span class="ic">${icon('check')}</span><span>Synchronisation active pour <strong>${esc(SYNC.email)}</strong>. Tes données sont chiffrées sur l'appareil avant d'être envoyées.</span></div>
@@ -3376,11 +3435,12 @@ const ACTIONS = {
     clearTimeout(APP.lockTimer);
     if ($('#sheet').open) $('#sheet').close();
     await forgetDevice();
+    await forgetRemember();
     APP.key = null; APP.state = null; APP.mode = null;
     try { sessionStorage.removeItem('prettycrea.mode'); } catch {}
     renderLock('Cet appareil est déconnecté.');
   },
-  lock: () => lock(),
+  lock: async () => { if (APP.mode === 'private' && APP.remember) { await forgetRemember(); toast('Verrouillé : le mot de passe sera demandé à la prochaine ouverture.'); } lock(); },
   'reset-demo': () => {
     if (APP.mode !== 'demo') return;
     const prev = APP.state;
@@ -3496,6 +3556,7 @@ const ACTIONS = {
     const v = ($('#wipe-confirm').value || '').trim().toUpperCase();
     if (v !== 'EFFACER') { $('#unlock-error').textContent = 'Écris EFFACER dans le champ pour confirmer.'; $('#wipe-confirm').focus(); return; }
     await kv.del('vault');
+    await forgetRemember();
     renderLock('Espace privé effacé. Tu peux en créer un nouveau.');
   },
   skip: (el, e) => { e.preventDefault(); $('#view').focus(); },
@@ -3520,6 +3581,12 @@ document.addEventListener('change', (e) => {
   if (el.matches('[data-show-pw]')) { $$('input[type="password"], input[data-was-pw]').forEach((i) => { i.type = el.checked ? 'text' : 'password'; i.toggleAttribute('data-was-pw', true); }); return; }
   if (el.id === 'profile-photo') { const f = el.files && el.files[0]; if (f) onProfilePhoto(f).catch(() => toast("Cette image n'a pas pu être lue. Essaie un fichier JPG ou PNG.")); return; }
   if (el.matches('[data-setting]')) { onSettingChange(el); return; }
+  if (el.id === 'set-remember') {
+    if (el.checked) { APP.remember = true; saveRemember(); toast('Cet appareil restera connecté.'); }
+    else { forgetRemember(); toast('Le mot de passe sera demandé à chaque ouverture.'); }
+    armAutoLock(); render();
+    return;
+  }
   if (el.matches('[data-client-field]')) {
     const c = clientById(el.dataset.id); if (!c) return;
     const k = el.dataset.clientField;
